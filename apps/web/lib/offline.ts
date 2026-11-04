@@ -83,6 +83,23 @@ function planOps(model: BuildingModel, s: string): Operation[] {
     return [parseOperation('swap_rooms', { roomA: a.id, roomB: b.id })];
   }
 
+  // "add a toilet to bed 3" / "add an attached toilet in the living room"
+  if ((m = s.match(/^add\s+(?:a\s+|an\s+)?(?:attached\s+|common\s+)?(?:toilet|bathroom|wc)\s+(?:to|in|for|attached to|off)\s+(?:the\s+)?(.+)$/))) {
+    const r = findEntities(model, m[1]!).find((e) => e.type === 'room');
+    if (!r) throw new Error(`Which room is "${m[1]}"?`);
+    return [parseOperation('add_toilet', { roomId: r.id })];
+  }
+
+  // "make toilet 2 a store" / "turn toilet 2 into a pooja room"
+  if ((m = s.match(/^(?:make|turn|convert)\s+(?:the\s+)?(.+?)\s+(?:into\s+)?(?:a\s+|an\s+)?(store|pooja(?: room)?|utility|study|wash)$/))) {
+    const r = findEntities(model, m[1]!).find((e) => e.type === 'room');
+    if (!r) throw new Error(`Which room is "${m[1]}"?`);
+    const use = m[2]!;
+    const kind = use.startsWith('pooja') ? 'pooja' : use === 'wash' || use === 'utility' ? 'service' : 'other';
+    const name = use.replace(/\b\w/g, (c) => c.toUpperCase());
+    return [parseOperation('set_room_use', { roomId: r.id, name, kind })];
+  }
+
   // "split the lobby on the east side, 6' as lift" / "split bed 3 east 5' as dress"
   if ((m = s.match(new RegExp(String.raw`^split\s+(?:the\s+)?(.+?)\s+(?:on\s+|from\s+)?(?:the\s+|its\s+)?${DIR}(?:\s+side)?,?\s+(?:by\s+)?${LEN}(?:\s+clear)?,?\s+(?:as|for|into)\s+(?:a\s+|an\s+|the\s+)?(.+)$`)))) {
     const r = findEntities(model, m[1]!).find((e) => e.type === 'room');

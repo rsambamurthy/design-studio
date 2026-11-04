@@ -3,7 +3,8 @@
  * (the area inside the setbacks), turn it 90° if the plinth is deep rather than
  * wide, and size it to fill the plinth exactly. The user can change it after.
  */
-import { applyOperation } from './kernel';
+import { applyOperation, hasAttachedToilet } from './kernel';
+import { roomClearRect } from './geometry';
 import { ModelError, type BuildingModel, type Opening, type Room } from './model';
 import { parseOperation, type Operation } from './ops';
 import { buildableRect, buildingOuterRect } from './site';
@@ -94,8 +95,16 @@ export interface StartResult {
  * Build Rev A: apply the site operations, then (when a plot is given) choose or
  * use the requested layout and size it to fill the plinth.
  */
-export function startDesign(templateId: string, siteOps: Operation[], name: string): StartResult {
+export interface RoomCounts {
+  /** 1–3; picks the layout. */
+  bedrooms?: number;
+  /** Total toilets; extra ones are attached to bedrooms, fewer turns the common toilet into a store. */
+  toilets?: number;
+}
+
+export function startDesign(templateId: string, siteOps: Operation[], name: string, counts: RoomCounts = {}): StartResult {
   const notes: string[] = [];
+  if (counts.bedrooms && templateId === 'auto') templateId = `${counts.bedrooms}bhk`;
   const auto = templateId === 'auto';
   const first = getTemplate(auto ? '3bhk' : templateId);
   if (!first) throw new ModelError('Pick a starting layout.');
@@ -108,6 +117,7 @@ export function startDesign(templateId: string, siteOps: Operation[], name: stri
   if (!site) {
     if (auto) throw new ModelError('Enter the plot size so a layout can be chosen for it.');
     notes.push(`Started from the ${first.name} template`);
+    if (counts.toilets) model = adjustToilets(model, counts.toilets, notes);
     return { model: { ...model, revision: 1 }, ops: siteOps, notes };
   }
 
@@ -137,5 +147,52 @@ export function startDesign(templateId: string, siteOps: Operation[], name: stri
   model = applyOperation(model, fit).model;
   if (template.finish) model = template.finish(model);
   notes.push(`sized to the ${formatLength(pw, 'ft-in')} × ${formatLength(ph, 'ft-in')} plinth`);
+  if (counts.toilets) model = adjustToilets(model, counts.toilets, notes);
   return { model: { ...model, revision: 1 }, ops: [...siteOps, fit], notes };
+}
+
+/**
+ * Bring a layout to the wanted number of toilets: attach new ones to bedrooms
+ * that have none (largest first), or turn surplus common toilets into stores.
+ */
+export function adjustToilets(input: BuildingModel, wanted: number, notes: string[] = []): BuildingModel {
+  let m = input;
+  const toilets = () => m.rooms.filter((r) => r.kind === 'toilet');
+  const have = toilets().length;
+  if (wanted === have) return m;
+  if (wanted < 1) throw new ModelError('A home needs at least one toilet.');
+  if (wanted < have) {
+    // Common toilets (not opening off a bedroom) go first.
+    const attachedTo = (t: Room) => m.rooms.some((b) => b.kind === 'bedroom' && hasAttachedToilet({ ...m, rooms: [b, t] }, b));
+    const order = [...toilets()].sort((a, b) => Number(attachedTo(a)) - Number(attachedTo(b)));
+    for (const t of order.slice(0, have - wanted)) {
+      m = applyOperation(m, parseOperation('set_room_use', { roomId: t.id, name: 'Store', kind: 'other' })).model;
+      notes.push(`${t.name} made a store`);
+    }
+    return m;
+  }
+  const area = (r: Room) => {
+    const c = roomClearRect(m, r);
+    return (c.x1 - c.x0) * (c.y1 - c.y0);
+  };
+  const failures: string[] = [];
+  while (toilets().length < wanted) {
+    // Attached to bedrooms without one (largest first), then a common toilet off the living area.
+    const beds = m.rooms.filter((r) => r.kind === 'bedroom' && !hasAttachedToilet(m, r) && !failures.includes(r.id)).sort((a, b) => area(b) - area(a));
+    const living = m.rooms.filter((r) => (r.kind === 'living' || r.kind === 'dining') && !failures.includes(r.id)).sort((a, b) => area(b) - area(a));
+    const bed = beds[0] ?? living[0];
+    if (!bed) {
+      const n = toilets().length;
+      throw new ModelError(
+        `Only ${n} toilet${n === 1 ? '' : 's'} fit${n === 1 ? 's' : ''} this layout: the bedrooms and living area are too small to give up space for another toilet. Choose ${n} toilets, more bedroom space (a bigger plinth), or fewer bedrooms.`,
+      );
+    }
+    try {
+      m = applyOperation(m, parseOperation('add_toilet', { roomId: bed.id })).model;
+      notes.push(bed.kind === 'bedroom' ? `toilet attached to ${bed.name}` : `common toilet off ${bed.name}`);
+    } catch {
+      failures.push(bed.id);
+    }
+  }
+  return m;
 }

@@ -66,6 +66,10 @@ export interface NewDesignInput {
   template?: unknown;
   /** Site operations ({ op, args }) applied before saving Rev A, e.g. set_plot, set_setback. */
   siteOps?: unknown;
+  /** 1–3 bedrooms (picks the layout when template is auto). */
+  bedrooms?: unknown;
+  /** Total toilets wanted. */
+  toilets?: unknown;
 }
 
 export async function createDesign(userId: string, input: NewDesignInput): Promise<string> {
@@ -84,7 +88,11 @@ export async function createDesign(userId: string, input: NewDesignInput): Promi
       }
       return parsed;
     });
-    ({ model, ops, notes } = startDesign(templateId, siteOps, name));
+    const count = (v: unknown, max: number) => {
+      const n = Number(v);
+      return Number.isInteger(n) && n >= 1 && n <= max ? n : undefined;
+    };
+    ({ model, ops, notes } = startDesign(templateId, siteOps, name, { bedrooms: count(input.bedrooms, 3), toilets: count(input.toilets, 4) }));
   } catch (err) {
     throw new AuthError(err instanceof Error ? err.message : String(err));
   }

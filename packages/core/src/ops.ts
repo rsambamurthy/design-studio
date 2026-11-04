@@ -51,6 +51,20 @@ export const OperationSchemas = {
   flip_item: z.object({ itemId: id('furniture item') }).describe('Swap the hand of a handed item (e.g. chaise left <-> right).'),
   remove: z.object({ entityId: id('opening, furniture item, stair or lift') }).describe('Remove a door, window, furniture item, stair or lift.'),
   rename_room: z.object({ roomId: id('room'), name: z.string().min(1) }).describe('Rename a room.'),
+  set_room_use: z
+    .object({
+      roomId: id('room'),
+      name: z.string().min(1),
+      kind: z.enum(['bedroom', 'toilet', 'kitchen', 'service', 'living', 'dining', 'balcony', 'lobby', 'pooja', 'stair', 'lift', 'other']),
+    })
+    .describe('Change what a room is used for (name and type), e.g. turn a toilet into a store. Walls and doors stay.'),
+  add_toilet: z
+    .object({
+      roomId: id('bedroom (or other room) the toilet is attached to'),
+      width: distance.optional().describe('Clear width of the toilet (default 5\')'),
+      length: distance.optional().describe('Clear length of the toilet (default 7\'); any spare length becomes a dress area'),
+    })
+    .describe('Add a toilet attached to a room: carved from the room along a wall without its door or window, with a door from the room, a ventilator on an outer wall, and a dress area if there is spare length.'),
   split_room: z
     .object({
       roomId: id('room to split'),

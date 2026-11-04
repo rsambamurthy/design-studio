@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, type FormEvent } from 'react';
-import { TEMPLATES, TREE_POSITIONS, buildingOuterRect, chooseLayout, formatLength, parseLength, type BuildingModel, type Compass } from '@ds/core';
+import { TEMPLATES, TREE_POSITIONS, buildingOuterRect, formatLength, parseLength, parseOperation, startDesign, type BuildingModel, type Compass } from '@ds/core';
 
 const SIDES: Compass[] = ['north', 'south', 'east', 'west'];
 
@@ -35,6 +35,8 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
   const [access, setAccess] = useState({ side: 'none', kind: 'passage', width: '' });
   const [trees, setTrees] = useState<TreeRow[]>([]);
   const [error, setError] = useState('');
+  const [bedrooms, setBedrooms] = useState(0); // 0 = decide from the plinth
+  const [toilets, setToilets] = useState(0); // 0 = as the layout comes
 
   function len(label: string, v: string, allowEmpty = false): string | null {
     const t = v.trim();
@@ -50,10 +52,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
     return t;
   }
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setError('');
-    try {
+  function buildSiteOps() {
       const siteOps: { op: string; args: Record<string, unknown> }[] = [];
       if (withPlot) {
         siteOps.push({ op: 'set_plot', args: { eastWest: len('Plot east–west', ew), northSouth: len('Plot north–south', ns) } });
@@ -69,8 +68,18 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
           if (t.label.trim()) siteOps.push({ op: 'add_tree', args: { label: t.label.trim(), position: t.position, keep: true } });
         }
       }
-      if (!withPlot && template === 'auto') throw new Error('Pick a layout, or enter the plot so one can be chosen for it.');
-      await onCreate({ name: name.trim() || 'Untitled design', template, siteOps });
+      return siteOps;
+  }
+
+  const counts = () => ({ ...(template === 'auto' && bedrooms ? { bedrooms } : {}), ...(toilets ? { toilets } : {}) });
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    try {
+      const siteOps = buildSiteOps();
+      if (!withPlot && template === 'auto' && !bedrooms) throw new Error('Pick a layout or the number of bedrooms, or enter the plot so one can be chosen for it.');
+      await onCreate({ name: name.trim() || 'Untitled design', template, siteOps, ...counts() });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create the design.');
     }
@@ -87,18 +96,22 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
       const ph = D - sb('north') - sb('south');
       if (pw <= 0 || ph <= 0) return { text: 'The setbacks leave no room to build.', bad: true };
       const area = Math.round((pw * ph) / 92903.04);
-      let pick = '';
+      const head = `Plinth ${formatLength(pw, 'ft-in')} × ${formatLength(ph, 'ft-in')} (${area.toLocaleString('en-IN')} sq ft)`;
       try {
-        const c = chooseLayout(pw, ph);
-        pick = ` → best fit: ${TEMPLATES.find((t) => t.id === c.templateId)!.name}${c.rotated ? ', turned 90°' : ''}`;
-      } catch {
-        pick = ' → too small or large for the standard layouts';
+        // Same code the server runs, so the preview matches what gets created.
+        const ops = buildSiteOps().map((o) => parseOperation(o.op, o.args));
+        const r = startDesign(template, ops, 'preview', counts());
+        const beds = r.model.rooms.filter((x) => x.kind === 'bedroom').length;
+        const wcs = r.model.rooms.filter((x) => x.kind === 'toilet').length;
+        const layout = r.notes[0]?.replace(/^Started from /, '').replace(/, chosen for .*$/, '') ?? '';
+        return { text: `${head} → ${layout}: ${beds} bedroom${beds === 1 ? '' : 's'}, ${wcs} toilet${wcs === 1 ? '' : 's'}`, bad: false };
+      } catch (err) {
+        return { text: `${head}. ${err instanceof Error ? err.message : ''}`, bad: true };
       }
-      return { text: `Plinth ${formatLength(pw, 'ft-in')} × ${formatLength(ph, 'ft-in')} (${area.toLocaleString('en-IN')} sq ft)${pick}`, bad: false };
     } catch {
       return null;
     }
-  }, [withPlot, ew, ns, setbacks]);
+  }, [withPlot, ew, ns, setbacks, access, trees, template, bedrooms, toilets]);
 
   const tplSize = (id: string) => {
     const r = buildingOuterRect(models[id]!);
@@ -134,6 +147,34 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
             <span className="tpl-size">{withPlot ? 'sized to your plinth' : `default ${tplSize(t.id)}`}</span>
           </button>
         ))}
+      </div>
+
+      <div className="nd-rooms">
+        <div>
+          <div className="nd-label">Bedrooms</div>
+          <div className="chips" role="radiogroup" aria-label="Bedrooms">
+            {[0, 1, 2, 3].map((n) => {
+              const fixed = template !== 'auto';
+              const on = fixed ? n === Number(template[0]) : bedrooms === n;
+              return (
+                <button type="button" key={n} role="radio" aria-checked={on} className={`chip ${on ? 'on' : ''}`} disabled={fixed} onClick={() => setBedrooms(n)}>
+                  {n === 0 ? 'Best fit' : n}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div>
+          <div className="nd-label">Toilets</div>
+          <div className="chips" role="radiogroup" aria-label="Toilets">
+            {[0, 1, 2, 3, 4].map((n) => (
+              <button type="button" key={n} role="radio" aria-checked={toilets === n} className={`chip ${toilets === n ? 'on' : ''}`} onClick={() => setToilets(n)}>
+                {n === 0 ? 'Standard' : n}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="nd-hint">Extra toilets are attached to bedrooms (largest first), then a common toilet off the living area. Fewer turns the common toilet into a store.</p>
       </div>
 
       <label className="nd-check">

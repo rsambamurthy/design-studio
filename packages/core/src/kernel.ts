@@ -43,7 +43,7 @@ import {
   namedPlotPoint,
   type TreePosition,
 } from './site';
-import type { Operation } from './ops';
+import { parseOperation as parseOp, type Operation } from './ops';
 import { CORNERS, DEFAULT_FLOOR_HEIGHT, LIFT_SHAFTS, coreFootprint, coresOf, placeInCorner, sizeStair, type Corner } from './cores';
 import { formatLength, parseLength } from './units';
 
@@ -570,6 +570,45 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       break;
     }
 
+    case 'set_room_use': {
+      const room = getRoom(model, args.roomId);
+      const before = room.name;
+      room.name = args.name;
+      room.kind = args.kind as Room['kind'];
+      room.wet = room.kind === 'toilet' || room.kind === 'kitchen' || room.kind === 'service';
+      for (const o of model.openings) {
+        if (o.label.startsWith(`${before} `)) {
+          o.label = `${args.name}${o.label.slice(before.length)}`;
+          ctx.touch(o.id);
+        }
+      }
+      ctx.touch(room.id);
+      ctx.summary = `${before} is now ${args.name}.`;
+      break;
+    }
+
+    case 'add_toilet': {
+      const room = getRoom(model, args.roomId);
+      const length = args.length ? ctx.length(args.length) : 2134;
+      const widths = args.width ? [ctx.length(args.width)] : [1524, 1372, 1220];
+      let r: ReturnType<typeof attachToilet> | undefined;
+      let last: unknown;
+      for (const w of widths) {
+        try {
+          r = attachToilet(model, room, w, length);
+          break;
+        } catch (err) {
+          last = err;
+        }
+      }
+      if (!r) throw last;
+      Object.assign(model, r.model);
+      ctx.touch(...r.changed);
+      ctx.summary = r.summary;
+      r.notes.forEach((n) => ctx.note(n));
+      break;
+    }
+
     case 'rename_room': {
       const room = getRoom(model, args.roomId);
       const before = room.name;
@@ -939,6 +978,166 @@ function fitCoreRooms(model: BuildingModel, ctx: Ctx) {
   }
 }
 type PlanSide4 = 'top' | 'bottom' | 'left' | 'right';
+
+const OPPOSITE = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' } as const;
+const SIDES4 = ['top', 'bottom', 'left', 'right'] as const;
+
+function uniqueName(m: BuildingModel, base: string): string {
+  const used = new Set(m.rooms.map((r) => r.name));
+  if (!used.has(base)) return base;
+  let n = 2;
+  while (used.has(`${base} ${n}`)) n++;
+  return `${base} ${n}`;
+}
+
+/** The wall two rooms share face to face, or undefined. */
+export function sharedWall(model: BuildingModel, a: Room, b: Room): string | undefined {
+  const side = SIDES4.find((x) => a.bounds[x] === b.bounds[OPPOSITE[x]]);
+  return side ? a.bounds[side] : undefined;
+}
+
+/** Openings on a room's wall that fall within the room's span. */
+export function roomOpeningsOn(model: BuildingModel, room: Room, side: PlanSide4): Opening[] {
+  const r = roomClearRect(model, room);
+  const wallId = room.bounds[side];
+  const wall = getWall(model, wallId);
+  const horizontal = side === 'top' || side === 'bottom';
+  return model.openings.filter((o) => {
+    if (o.wallId !== wallId) return false;
+    const p = pointOnWall(wall, o.offset);
+    return horizontal ? p.x > r.x0 && p.x < r.x1 : p.y > r.y0 && p.y < r.y1;
+  });
+}
+
+/** True when a toilet opens directly off this room. */
+export function hasAttachedToilet(model: BuildingModel, room: Room): boolean {
+  return model.rooms.some((t) => {
+    if (t.kind !== 'toilet') return false;
+    const w = sharedWall(model, room, t);
+    if (!w) return false;
+    const side = SIDES4.find((x) => t.bounds[x] === w)!;
+    return roomOpeningsOn(model, t, side).some((o) => o.kind === 'door' || o.kind === 'opening');
+  });
+}
+
+/**
+ * Carve a toilet out of a room along a wall that has neither the room's door
+ * nor its window, keeping the room at a usable size. The toilet goes at the
+ * end on an outer wall (for a ventilator); spare length becomes a dress area.
+ */
+function attachToilet(input: BuildingModel, room: Room, width: number, length: number) {
+  let m = input;
+  const changed = new Set<string>();
+  const notes: string[] = [];
+  const run = (name: string, a: Record<string, unknown>) => {
+    const r = applyOperation(m, parseOp(name, a));
+    m = r.model;
+    r.changedIds.forEach((i) => changed.add(i));
+    return r;
+  };
+  const T = 115;
+  const u = input.displayUnits;
+  const minKeep = room.kind === 'bedroom' ? 2700 : room.kind === 'living' || room.kind === 'dining' ? 3000 : 1500;
+  const r = roomClearRect(m, room);
+  const wallOf = (side: PlanSide4) => getWall(m, room.bounds[side]);
+  const ends = (side: PlanSide4): PlanSide4[] => (side === 'top' || side === 'bottom' ? ['left', 'right'] : ['top', 'bottom']);
+  const options = SIDES4.flatMap((side) => {
+    const on = roomOpeningsOn(m, room, side);
+    if (on.length > 0) return [];
+    const horizontal = side === 'top' || side === 'bottom';
+    const across = horizontal ? r.y1 - r.y0 : r.x1 - r.x0;
+    const along = horizontal ? r.x1 - r.x0 : r.y1 - r.y0;
+    const keep = across - width - T;
+    if (keep < minKeep || along < length) return [];
+    const ext = ends(side).filter((e) => wallOf(e).kind === 'external' && roomOpeningsOn(m, room, e).every((o) => o.kind !== 'door'));
+    const end = ext[0] ?? ends(side)[0]!;
+    const score = (ext.length ? 2 : 0) + (wallOf(side).kind === 'plumbing' ? 1 : 0) + keep / 10000;
+    return [{ side, end, along, outer: ext.length > 0, score }];
+  }).sort((a, b) => b.score - a.score);
+  const pick = options[0];
+  if (!pick) {
+    throw new ModelError(
+      `${room.name} has no wall free of its door and windows with room for a ${formatLength(width, u)} × ${formatLength(length, u)} toilet while keeping ${room.name} at least ${formatLength(minKeep, u)} wide.`,
+    );
+  }
+  const compass = (s: PlanSide4) => planSideCompass(s, m.northAngle);
+  const used = new Set(m.rooms.map((x) => x.name));
+  let n = m.rooms.filter((x) => x.kind === 'toilet').length + 1;
+  while (used.has(`Toilet ${n}`)) n++;
+  const toiletName = `Toilet ${n}`;
+  run('split_room', { roomId: room.id, side: compass(pick.side), size: `${Math.round(width)} mm`, name: toiletName, kind: 'toilet' });
+  const toilet = m.rooms.find((x) => x.name === toiletName)!;
+  const spare = pick.along - length - T;
+  let dress: Room | undefined;
+  if (spare >= 900) {
+    const dressName = room.kind === 'bedroom' ? `${room.name} dress` : uniqueName(m, 'Wash');
+    run('split_room', { roomId: toilet.id, side: compass(OPPOSITE[pick.end]), size: `${Math.round(spare)} mm`, name: dressName, kind: 'other' });
+    dress = m.rooms.find((x) => x.name === dressName);
+  }
+  const host = m.rooms.find((x) => x.id === room.id)!;
+  // Doors (and a window the room would otherwise lose) on the end walls that now
+  // open into the toilet or dress area, or straddle the new wall, go back into the room.
+  {
+    const hostRect = roomClearRect(m, host);
+    const endWalls = ends(pick.side).map((e) => host.bounds[e]);
+    const inHost = (o: Opening) => {
+      const w = getWall(m, o.wallId);
+      const p = pointOnWall(w, o.offset);
+      const d = wallDir(w);
+      const half = o.width / 2;
+      const a = { x: p.x - d.x * half, y: p.y - d.y * half };
+      const b = { x: p.x + d.x * half, y: p.y + d.y * half };
+      // Compare along the wall only (the wall itself lies outside the clear rectangle).
+      const horizontal = isHorizontal(w);
+      const lo = horizontal ? hostRect.x0 : hostRect.y0;
+      const hi = horizontal ? hostRect.x1 : hostRect.y1;
+      const k = horizontal ? 'x' : 'y';
+      return Math.min(a[k], b[k]) >= lo - 1 && Math.max(a[k], b[k]) <= hi + 1;
+    };
+    const ours = m.openings.filter((o) => endWalls.includes(o.wallId) && o.id !== undefined);
+    const windowsLeft = m.openings.filter((o) => o.kind !== 'door' && o.kind !== 'opening' && Object.values(host.bounds).includes(o.wallId) && inHost(o)).length;
+    for (const o of ours) {
+      if (inHost(o)) continue;
+      // Only openings that belonged to the room before the split.
+      const wasOurs = input.openings.some((x) => x.id === o.id) && roomOpeningsOn(input, room, SIDES4.find((x) => room.bounds[x] === o.wallId)!).some((x) => x.id === o.id);
+      if (!wasOurs) continue;
+      const isWindow = o.kind === 'window' || o.kind === 'sliding';
+      if (isWindow && windowsLeft > 0) continue;
+      run('centre_opening', { openingId: o.id, roomId: host.id });
+      notes.push(`${o.label} moved along its wall so it still opens into ${room.name}.`);
+    }
+  }
+  run('add_opening', { wallId: sharedWall(m, host, toilet)!, kind: 'door', width: '2\'6"', label: `${toiletName} door`, roomId: toilet.id });
+  if (dress) {
+    if (room.kind !== 'bedroom') run('set_room_use', { roomId: dress.id, name: dress.name, kind: 'service' });
+    run('add_opening', { wallId: sharedWall(m, host, dress)!, kind: 'opening', width: '3\'', label: `${dress.name} opening`, roomId: dress.id });
+  }
+  if (pick.outer) {
+    try {
+      run('add_opening', { wallId: toilet.bounds[pick.end], kind: 'window', width: '2\'', label: `${toiletName} ventilator`, roomId: toilet.id });
+    } catch {
+      notes.push(`No room for a ventilator on ${toiletName}'s outer wall.`);
+    }
+  } else {
+    notes.push(`${toiletName} has no outer wall; plan a duct or exhaust for ventilation.`);
+  }
+  // Keep the room's furniture in the room.
+  const keepRect = roomClearRect(m, host);
+  for (const f of m.furniture) {
+    if (f.roomId !== toilet.id && f.roomId !== dress?.id) continue;
+    f.roomId = host.id;
+    const fr = itemFootprint(f);
+    const hw = (fr.x1 - fr.x0) / 2;
+    const hh = (fr.y1 - fr.y0) / 2;
+    f.at = { x: Math.round(Math.min(Math.max(f.at.x, keepRect.x0 + hw), keepRect.x1 - hw)), y: Math.round(Math.min(Math.max(f.at.y, keepRect.y0 + hh), keepRect.y1 - hh)) };
+    changed.add(f.id);
+  }
+  const ts = roomClearRect(m, toilet);
+  const summary = `Added ${toiletName} ${room.kind === 'bedroom' ? 'attached to' : 'off'} ${room.name}: ${formatLength(ts.x1 - ts.x0, u)} × ${formatLength(ts.y1 - ts.y0, u)}${dress ? (room.kind === 'bedroom' ? ', with a dress area' : `, with a ${dress.name.toLowerCase()} area`) : ''}.`;
+  notes.push(`Carved from ${room.name} along its ${compass(pick.side)} side; ${room.name} is now ${roomSizeText(m, host)}.`);
+  return { model: m, changed: [...changed], summary, notes };
+}
+
 
 /**
  * Resize a layout so its outer walls measure outerW × outerH (mm). Returns any

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import {
   buildableRect,
   buildingOuterRect,
@@ -170,15 +170,9 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     setViewing(null);
   }
 
-  async function send(text: string) {
-    const message = text.trim();
-    if (!message || busy) return;
-    setInput('');
-    if (/^(undo|undo that|go back)$/i.test(message)) return void undo(message);
-    if (/^redo$/i.test(message)) return void redoLast(message);
-    say({ role: 'user', text: message });
-    setEditStatus(null);
-    setBusy(true);
+  /** One instruction as one turn. Returns false when the run of instructions should stop. */
+  async function sendOne(message: string, step?: { n: number; of: number }): Promise<boolean> {
+    say({ role: 'user', text: step ? `(${step.n}/${step.of}) ${message}` : message });
     try {
       const r = await api<{ turn: Turn; revision: number | null; design: DesignDetail }>(`/api/designs/${design.id}/chat`, {
         method: 'POST',
@@ -200,8 +194,42 @@ export default function Studio({ email, initial }: { email: string; initial: Des
         options: r.turn.question?.options,
         offline: r.turn.mode === 'offline',
       });
+      // A question back, or nothing changed: stop so the user can answer or fix it.
+      return !!r.revision && !r.turn.question;
     } catch (e) {
       say({ role: 'ai', text: e instanceof Error ? e.message : 'Something went wrong.', error: true });
+      return false;
+    }
+  }
+
+  /** Send one instruction, or several (one per line) that run in turn, each saved as its own revision. */
+  async function send(text: string) {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0 || busy) return;
+    setInput('');
+    if (lines.length === 1) {
+      const message = lines[0]!;
+      if (/^(undo|undo that|go back)$/i.test(message)) return void undo(message);
+      if (/^redo$/i.test(message)) return void redoLast(message);
+    }
+    setEditStatus(null);
+    setBusy(true);
+    try {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]!;
+        const step = lines.length > 1 ? { n: i + 1, of: lines.length } : undefined;
+        if (step && /^(undo|undo that|go back|redo)$/i.test(line)) {
+          say({ role: 'ai', text: 'Undo and redo can\'t run inside a list of instructions; use the Undo and Redo buttons. Skipped that line.' });
+          continue;
+        }
+        const ok = await sendOne(line, step);
+        if (!ok && i < lines.length - 1) {
+          const rest = lines.slice(i + 1);
+          setInput(rest.join('\n'));
+          say({ role: 'ai', text: `Stopped after step ${i + 1} of ${lines.length}. The remaining ${rest.length === 1 ? 'instruction is' : `${rest.length} instructions are`} back in the box; press Enter to carry on.` });
+          break;
+        }
+      }
     } finally {
       setBusy(false);
     }
@@ -326,6 +354,23 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     void send(input);
   };
 
+  // Enter sends; Alt+Enter (or Shift+Enter) adds a line. Each line runs as its own step.
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const onInputKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+    if (e.altKey || e.shiftKey) {
+      e.preventDefault();
+      // Insert in place so the caret stays put, however fast the typing.
+      const el = e.currentTarget;
+      el.setRangeText('\n', el.selectionStart, el.selectionEnd, 'end');
+      setInput(el.value);
+      return;
+    }
+    e.preventDefault();
+    void send(input);
+  };
+  const lineCount = input.split('\n').filter((l) => l.trim()).length;
+
   return (
     <AppShell email={email} chip={design.name} active={navActive} designId={design.id} onNav={onNav}>
       <h1>{design.name}</h1>
@@ -388,9 +433,19 @@ export default function Studio({ email, initial }: { email: string; initial: Des
                 </div>
               )}
               <form className="chat-input" onSubmit={onSubmit}>
-                <input value={input} onChange={(e) => setInput(e.target.value)} placeholder={viewing ? 'Back to current to edit…' : 'Describe a change…'} aria-label="Describe a change" disabled={busy || !!viewing} />
-                <button className="btn-primary" type="submit" disabled={busy || !input.trim() || !!viewing}>Send</button>
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  rows={Math.min(6, Math.max(1, input.split('\n').length))}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={onInputKey}
+                  placeholder={viewing ? 'Back to current to edit…' : 'Describe a change… (Alt+Enter for another line)'}
+                  aria-label="Describe a change"
+                  disabled={busy || !!viewing}
+                />
+                <button className="btn-primary" type="submit" disabled={busy || !input.trim() || !!viewing}>{lineCount > 1 ? `Run ${lineCount}` : 'Send'}</button>
               </form>
+              <p className="chat-hint">Enter sends · Alt+Enter adds another instruction; they run one after the other, each saved as its own revision.</p>
             </div>
           )}
 
