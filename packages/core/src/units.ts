@@ -1,6 +1,6 @@
 /**
- * Deterministic length parsing and formatting. Units were one of the two most
- * common error sources in the reference project, so this is plain code, never
+ * Deterministic length parsing and formatting. Units are one of the most common
+ * error sources when designing by conversation, so this is plain code, never
  * left to the LLM's judgement.
  */
 import { ModelError, type Mm } from './model';

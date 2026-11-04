@@ -22,7 +22,7 @@ export default function SitePlanView({ model, issues, hot }: { model: BuildingMo
   if (!site) {
     return (
       <div className="plan-wrap site-empty">
-        <p>No plot yet. Enter the plot size in the <b>Site</b> tab, or tell the assistant, e.g. “plot is 62&apos;6&quot; east–west by 52&apos; north–south”.</p>
+        <p>No plot yet. Enter the plot size in the <b>Site</b> tab, or tell the assistant, e.g. “plot is 60&apos; east–west by 40&apos; north–south”.</p>
       </div>
     );
   }

@@ -1,8 +1,9 @@
 /**
- * Starter layouts a new design can begin from. All north-up, single level.
- * Sizes are wall centre-to-centre; fit_to_buildable resizes them to a plot.
+ * Starter layouts a new design can begin from. All north-up, single level,
+ * with generic default sizes; fit_to_buildable resizes them to the user's plot.
  */
 import type { BuildingModel } from './model';
+import { resizeLayout } from './kernel';
 import { EXT, INT, L, PLUMB, opening, room, sampleModel, wall } from './seed';
 
 export interface Template {
@@ -110,11 +111,11 @@ export const TEMPLATES: Template[] = [
   {
     id: '3bhk',
     name: '3BHK flat',
-    description: "3 bedrooms, 2 toilets, kitchen, living/dining, lift & stair lobby. 52'6\" × 35'.",
-    build: () => ({ ...sampleModel(), name: '3BHK Flat' }),
+    description: '3 bedrooms, 2 toilets, kitchen, living/dining, lift & stair lobby.',
+    build: () => ({ ...resizeLayout(sampleModel(), L("48'"), L("34'")).model, id: 'template-3bhk', name: '3BHK Flat', levelName: 'Typical floor' }),
   },
-  { id: '2bhk', name: '2BHK flat', description: "2 bedrooms, 2 toilets, kitchen, living/dining. 40' × 30'.", build: twoBhk },
-  { id: '1bhk', name: '1BHK flat', description: "1 bedroom, toilet, wash, kitchen, living/dining. 26' × 24'.", build: oneBhk },
+  { id: '2bhk', name: '2BHK flat', description: '2 bedrooms, 2 toilets, kitchen, living/dining.', build: twoBhk },
+  { id: '1bhk', name: '1BHK flat', description: '1 bedroom, toilet, wash, kitchen, living/dining.', build: oneBhk },
 ];
 
 export function getTemplate(id: string): Template | undefined {

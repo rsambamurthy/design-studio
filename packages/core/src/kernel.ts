@@ -427,7 +427,7 @@ class Ctx {
   }
 
   site(): Site {
-    if (!this.model.site) throw new ModelError('Set the plot size first (e.g. "plot is 62\'6\" east–west by 52\' north–south").');
+    if (!this.model.site) throw new ModelError('Set the plot size first (e.g. "plot is 60\' east–west by 40\' north–south").');
     return this.model.site;
   }
 
@@ -612,6 +612,17 @@ function fitBuilding(model: BuildingModel, outerW: number, outerH: number, ctx: 
     const y = gt <= gb ? after.y0 + gt + h / 2 : after.y1 - gb - h / 2;
     f.at = { x: Math.round(x), y: Math.round(y) };
   }
+}
+
+/**
+ * Resize a layout so its outer walls measure outerW × outerH (mm). Returns any
+ * notes (e.g. openings narrowed). Used for template defaults and fit_to_buildable.
+ */
+export function resizeLayout(input: BuildingModel, outerW: number, outerH: number): { model: BuildingModel; notes: string[] } {
+  const model = structuredClone(input);
+  const ctx = new Ctx(model);
+  fitBuilding(model, outerW, outerH, ctx);
+  return { model, notes: ctx.assumptions };
 }
 
 /** Centre the building in the buildable area (or the plot when setbacks are zero). */

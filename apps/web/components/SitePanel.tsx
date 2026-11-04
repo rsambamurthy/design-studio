@@ -42,8 +42,9 @@ export default function SitePanel({ model, busy, apply, revLabel }: Props) {
   const fmt = (mm: number) => formatLength(mm, u);
   const sideOf = (c: Compass) => compassToSide(c, model.northAngle);
 
-  const [ew, setEw] = useState('');
-  const [ns, setNs] = useState('');
+  // Default plot when none is set yet: 60' east–west × 40' north–south.
+  const [ew, setEw] = useState("60'");
+  const [ns, setNs] = useState("40'");
   const [setbacks, setSetbacks] = useState<Record<Compass, string>>({ north: '', south: '', east: '', west: '' });
   const [access, setAccess] = useState<Record<Compass, { kind: AccessKind; width: string }>>({
     north: { kind: 'none', width: '' },
@@ -149,7 +150,7 @@ export default function SitePanel({ model, busy, apply, revLabel }: Props) {
   return (
     <div className="site-panel">
       <p className="card-desc">
-        Enter lengths as you&apos;d write them: 62&apos;6&quot;, 12&apos;, 1500 mm. Setbacks are measured from the plot boundary to the building&apos;s outer wall face.
+        Enter lengths as you&apos;d write them: 40&apos;, 12&apos;6&quot;, 1500 mm. Setbacks are measured from the plot boundary to the building&apos;s outer wall face.
       </p>
       {error && <p className="form-error" role="alert">{error}</p>}
       {result && (
@@ -168,8 +169,8 @@ export default function SitePanel({ model, busy, apply, revLabel }: Props) {
       <form className="site-section" onSubmit={savePlot}>
         <div className="site-head">Plot size</div>
         <div className="field-grid two">
-          <label>East–west<input value={ew} onChange={(e) => setEw(e.target.value)} placeholder={'62\'6"'} inputMode="text" /></label>
-          <label>North–south<input value={ns} onChange={(e) => setNs(e.target.value)} placeholder="52'" /></label>
+          <label>East–west<input value={ew} onChange={(e) => setEw(e.target.value)} placeholder="60'" inputMode="text" /></label>
+          <label>North–south<input value={ns} onChange={(e) => setNs(e.target.value)} placeholder="40'" /></label>
         </div>
         <button className="btn-primary btn-sm" disabled={busy || !ew || !ns}>{site ? 'Update plot' : 'Set plot'}</button>
       </form>

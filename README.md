@@ -37,7 +37,8 @@ packages/core   Deterministic design core (no UI, no LLM)
   checks.ts     Fit, overlaps, front clearances, door swings, room minimums
   summary.ts    Compact model summary for the LLM; plain-language reference resolver
   catalogue.ts  Starter catalogue (Indian-standard sizes)
-  seed.ts       Sample 52'6" × 35' 3BHK flat
+  seed.ts       Base 3BHK layout (also the test fixture)
+  templates.ts  Starter layouts offered when creating a design
 
 apps/web        Next.js app
   lib/agent.ts       Claude tool-use loop (server-side)
@@ -46,7 +47,7 @@ apps/web        Next.js app
   app/smartappt-theme.css   Tokens extracted from smartapptgold.integratatech.ai
 ```
 
-## Design rules carried from the reference project
+## Design rules
 
 - Everything lives in the model; drawings are outputs, never edited as images.
 - Every edit reports what else it touched (`changedIds`) so knock-on effects show.

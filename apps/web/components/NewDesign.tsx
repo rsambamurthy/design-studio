@@ -28,8 +28,9 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
   const [name, setName] = useState('');
   const [template, setTemplate] = useState('3bhk');
   const [withPlot, setWithPlot] = useState(true);
-  const [ew, setEw] = useState('');
-  const [ns, setNs] = useState('');
+  // Default plot: 60' east–west × 40' north–south (edit freely).
+  const [ew, setEw] = useState("60'");
+  const [ns, setNs] = useState("40'");
   const [setbacks, setSetbacks] = useState<Record<Compass, string>>({ north: '', south: '', east: '', west: '' });
   const [access, setAccess] = useState({ side: 'none', kind: 'passage', width: '' });
   const [trees, setTrees] = useState<TreeRow[]>([]);
@@ -45,7 +46,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
     try {
       parseLength(t);
     } catch {
-      throw new Error(`${label}: "${t}" isn't a length. Use forms like 62'6", 12', 1500 mm.`);
+      throw new Error(`${label}: "${t}" isn't a length. Use forms like 40', 12'6", 1500 mm.`);
     }
     return t;
   }
@@ -85,7 +86,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
       <div className="card-title">New design</div>
 
       <label className="nd-label" htmlFor="nd-name">Name</label>
-      <input id="nd-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Vaidyas – first floor" aria-label="Design name" maxLength={120} />
+      <input id="nd-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ground floor – option 1" aria-label="Design name" maxLength={120} />
 
       <div className="nd-label">Start from</div>
       <div className="tpl-grid" role="radiogroup" aria-label="Starting layout">
@@ -113,8 +114,8 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
       {withPlot && (
         <div className="nd-plot">
           <div className="field-grid two">
-            <label>Plot east–west<input value={ew} onChange={(e) => setEw(e.target.value)} placeholder={'62\'6"'} aria-label="Plot east–west" /></label>
-            <label>Plot north–south<input value={ns} onChange={(e) => setNs(e.target.value)} placeholder="52'" aria-label="Plot north–south" /></label>
+            <label>Plot east–west<input value={ew} onChange={(e) => setEw(e.target.value)} placeholder="60'" aria-label="Plot east–west" /></label>
+            <label>Plot north–south<input value={ns} onChange={(e) => setNs(e.target.value)} placeholder="40'" aria-label="Plot north–south" /></label>
           </div>
           <div className="nd-sub">Setbacks (leave blank for none)</div>
           <div className="field-grid four">

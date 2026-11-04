@@ -1,7 +1,7 @@
 /**
- * Sample design: a 52'6" (E–W) × 35' (N–S) first-floor flat, north up,
- * 3 bedrooms, kitchen, living/dining and a lift/stair lobby. Proportions follow
- * the reference project; it is a demo layout, not that building's drawings.
+ * Base 3BHK layout (north up): 3 bedrooms, 2 toilets, kitchen, living/dining and
+ * a lift/stair lobby. Also the fixture most core tests use. The user-facing
+ * 3BHK template is this layout resized to a generic default (see templates.ts).
  */
 import type { BuildingModel, Opening, Room, Wall } from './model';
 import { parseLength } from './units';
