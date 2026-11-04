@@ -6,24 +6,24 @@
 import type { BuildingModel, Opening, Room, Wall } from './model';
 import { parseLength } from './units';
 
-const L = (s: string) => parseLength(s).mm;
+export const L = (s: string) => parseLength(s).mm;
 
-const EXT = L('9"');
-const INT = L('4.5"');
-const PLUMB = L('6"');
+export const EXT = L('9"');
+export const INT = L('4.5"');
+export const PLUMB = L('6"');
 
 const X = { w: 0, v1: L("13'"), v2: L("18'"), v3: L("28'"), v4: L("37'"), e: L("52'6\"") };
 const Y = { n: 0, t: L("8'"), mid: L("14'"), s: L("35'") };
 
-function wall(id: string, a: [number, number], b: [number, number], thickness: number, kind: Wall['kind']): Wall {
+export function wall(id: string, a: [number, number], b: [number, number], thickness: number, kind: Wall['kind']): Wall {
   return { id, a: { x: a[0], y: a[1] }, b: { x: b[0], y: b[1] }, thickness, kind };
 }
 
-function room(id: string, name: string, kind: Room['kind'], top: string, bottom: string, left: string, right: string, wet = false): Room {
+export function room(id: string, name: string, kind: Room['kind'], top: string, bottom: string, left: string, right: string, wet = false): Room {
   return { id, name, kind, wet, bounds: { top, bottom, left, right } };
 }
 
-function opening(id: string, label: string, wallId: string, kind: Opening['kind'], offset: string, width: string, swingSide: Opening['swingSide'] = 'left', hinge: Opening['hinge'] = 'start'): Opening {
+export function opening(id: string, label: string, wallId: string, kind: Opening['kind'], offset: string, width: string, swingSide: Opening['swingSide'] = 'left', hinge: Opening['hinge'] = 'start'): Opening {
   return { id, label, wallId, kind, offset: L(offset), width: L(width), height: kind === 'window' ? 1200 : 2100, swingSide, hinge };
 }
 

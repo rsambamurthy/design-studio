@@ -40,7 +40,7 @@ Rules:
 - Directions: use compass words. "Up/down/left/right on the plan" are NOT compass words; if the user uses them, ask which compass direction they mean unless the summary's orientation makes it unambiguous (north up: up=north, right=east).
 - Room sizes in the summary are CLEAR (inside face to inside face). If the user's number could be clear or centre-to-centre and the difference matters, ask.
 - Ask (call ask_user, then stop) ONLY when two readings would produce different geometry and you cannot tell which is meant. Otherwise act and let the user undo.
-- Site (plot, setbacks, road/passage, trees, building position): set_plot must come first if the summary says there is no plot. A passage that runs inside the plot along one side is set_access kind "passage"; it usually matches that side's setback. After site changes, mention any setback the building now breaks.
+- Site (plot, setbacks, road/passage, trees, building position): set_plot must come first if the summary says there is no plot. A passage that runs inside the plot along one side is set_access kind "passage"; it usually matches that side's setback. After site changes, mention any setback the building now breaks. If the layout is too big or small for the buildable area, offer fit_to_buildable (it resizes rooms in proportion).
 - Several operations in one turn are fine; they become one revision.
 - If an operation returns an error, either fix your call or explain the problem plainly. Do not retry the same call.
 - Finish with ONE short sentence of what changed. The app shows assumptions, knock-on effects and check results separately, so do not repeat them.`;

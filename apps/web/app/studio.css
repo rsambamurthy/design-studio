@@ -228,3 +228,28 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .site-result .delta { margin-top: 4px; font-size: 11.5px; font-weight: 600; color: var(--color-success); }
 .site-result .delta.warn { color: var(--theme-accent); }
 .site-result .mode { margin-top: 4px; font-size: 10.5px; color: var(--color-muted); text-transform: uppercase; letter-spacing: .04em; }
+
+/* ---------- New design ---------- */
+.new-design { display: flex; flex-direction: column; gap: 8px; max-width: 860px; }
+.nd-label { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--theme-accent); margin-top: 6px; }
+.nd-sub { font-size: 12px; font-weight: 600; color: var(--color-muted); margin-top: 6px; }
+.nd-check { display: flex; gap: 8px; align-items: center; font-size: 13px; font-weight: 500; margin-top: 4px; }
+.nd-plot { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius); background: #fcfdff; }
+.nd-plot > .btn-sm { align-self: flex-start; }
+.nd-create { align-self: flex-start; margin-top: 6px; padding: .6rem 1.4rem; }
+.field-grid.three { grid-template-columns: 1fr 1.4fr 1fr; }
+.field-grid.tree-row { grid-template-columns: 1fr 1fr auto; align-items: center; }
+.field-grid.tree-row input, .field-grid.tree-row select { padding: .4rem .5rem; font-size: 13px; min-width: 0; }
+.tpl-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.tpl-card { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px; background: #fff; border: 1.5px solid var(--color-border); border-radius: var(--radius); cursor: pointer; font-family: inherit; color: inherit; }
+.tpl-card.on { border-color: var(--theme-accent); background: #fff8f4; box-shadow: 0 0 0 2px rgba(122, 33, 11, .12); }
+.tpl-thumb { width: 100%; height: 86px; margin-bottom: 4px; }
+.tpl-thumb line { stroke: var(--color-text); }
+.tpl-card.on .tpl-thumb line { stroke: var(--theme-accent); }
+.tpl-name { font-weight: 700; font-size: 13.5px; }
+.tpl-desc { font-size: 11.5px; color: var(--color-muted); line-height: 1.35; }
+.tpl-size { font-size: 11px; color: var(--theme-primary); font-weight: 600; }
+@media (max-width: 700px) {
+  .tpl-grid { grid-template-columns: 1fr 1fr; }
+  .field-grid.three { grid-template-columns: 1fr 1fr; }
+}

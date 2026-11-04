@@ -90,6 +90,9 @@ export const OperationSchemas = {
     })
     .describe('Position the building within the setbacks.'),
   move_building: z.object({ direction: compass, distance }).describe('Shift the whole building on the plot.'),
+  fit_to_buildable: z
+    .object({})
+    .describe('Resize the whole layout so its outer walls exactly fill the buildable area inside the setbacks. Rooms scale in proportion; wall thicknesses, doors, windows and furniture sizes stay the same.'),
 } as const;
 
 export type OperationName = keyof typeof OperationSchemas;

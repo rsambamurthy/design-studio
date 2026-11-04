@@ -10,3 +10,4 @@ export * from './summary';
 export * from './seed';
 export * from './compare';
 export * from './site';
+export * from './templates';

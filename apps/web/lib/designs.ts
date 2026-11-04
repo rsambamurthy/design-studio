@@ -3,7 +3,7 @@
  * ownership. Models are produced on the server (by the kernel), never accepted
  * from the browser, so stored revisions always come from validated operations.
  */
-import { sampleModel, type BuildingModel, type Operation } from '@ds/core';
+import { applyOperation, getTemplate, parseOperation, type BuildingModel, type Operation } from '@ds/core';
 import { getDb, newId, type Db } from './db';
 import { AuthError } from './auth';
 
@@ -61,16 +61,53 @@ export async function listDesigns(userId: string): Promise<DesignSummary[]> {
   return rows.map((r) => ({ id: r.id, name: r.name, currentRev: r.current_rev, updatedAt: String(r.updated_at), lastChange: r.summary }));
 }
 
-export async function createDesign(userId: string, nameInput: unknown): Promise<string> {
-  const name = cleanName(nameInput);
-  const model = { ...sampleModel(), name, revision: 1 };
+export interface NewDesignInput {
+  name?: unknown;
+  template?: unknown;
+  /** Site operations ({ op, args }) applied before saving Rev A, e.g. set_plot, set_setback. */
+  siteOps?: unknown;
+  /** Resize the layout to fill the buildable area once the plot is set. */
+  fit?: unknown;
+}
+
+export async function createDesign(userId: string, input: NewDesignInput): Promise<string> {
+  const name = cleanName(input.name);
+  const template = getTemplate(String(input.template ?? '3bhk'));
+  if (!template) throw new AuthError('Pick a starting layout.');
+  let model: BuildingModel = { ...template.build(), name, revision: 1 };
+
+  const raw = Array.isArray(input.siteOps) ? input.siteOps.slice(0, 30) : [];
+  const ops: Operation[] = [];
+  const notes: string[] = [`Started from the ${template.name} template`];
+  try {
+    for (const o of raw) {
+      const { op, args } = (o ?? {}) as { op?: unknown; args?: unknown };
+      const parsed = parseOperation(String(op), args);
+      if (!parsed.op.startsWith('set_') && !['add_tree', 'place_building', 'remove_access'].includes(parsed.op)) {
+        throw new Error(`"${parsed.op}" can't be used when creating a design.`);
+      }
+      ops.push(parsed);
+    }
+    for (const op of ops) model = applyOperation(model, op).model;
+    if (model.site) notes.push('plot and setbacks entered');
+    if (input.fit === true && model.site) {
+      const fitOp = parseOperation('fit_to_buildable', {});
+      model = applyOperation(model, fitOp).model;
+      ops.push(fitOp);
+      notes.push('layout sized to the buildable area');
+    }
+  } catch (err) {
+    throw new AuthError(err instanceof Error ? err.message : String(err));
+  }
+  model = { ...model, revision: 1 };
+
   const db = await getDb();
   const id = newId(12);
   await db.tx(async (q) => {
     await q.query(`INSERT INTO designs (id, owner_id, name) VALUES ($1, $2, $3)`, [id, userId, name]);
     await q.query(
-      `INSERT INTO revisions (design_id, number, request, summary, model) VALUES ($1, 1, $2, $3, $4)`,
-      [id, 'New design', 'Started from the sample 3BHK flat', JSON.stringify(model)],
+      `INSERT INTO revisions (design_id, number, request, summary, ops, model) VALUES ($1, 1, $2, $3, $4, $5)`,
+      [id, 'New design', notes.join('; '), JSON.stringify(ops), JSON.stringify(model)],
     );
   });
   return id;

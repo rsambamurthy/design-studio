@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { revisionLetter } from '@ds/core';
 import AppShell from './AppShell';
+import NewDesign from './NewDesign';
 
 interface DesignSummary {
   id: string;
@@ -34,7 +35,6 @@ export function when(iso: string): string {
 
 export default function DesignsHome({ email }: { email: string }) {
   const [designs, setDesigns] = useState<DesignSummary[] | null>(null);
-  const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -60,12 +60,14 @@ export default function DesignsHome({ email }: { email: string }) {
     }
   }
 
-  const create = (e: FormEvent) => {
-    e.preventDefault();
-    void act(async () => {
-      const r = await api<{ id: string }>('/api/designs', { method: 'POST', json: { name: name || 'Untitled design' } });
+  const create = async (body: Record<string, unknown>) => {
+    setBusy(true);
+    try {
+      const r = await api<{ id: string }>('/api/designs', { method: 'POST', json: body });
       window.location.href = `/d/${r.id}`;
-    });
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -73,14 +75,7 @@ export default function DesignsHome({ email }: { email: string }) {
       <h1>My Designs</h1>
       <p className="sa-subtitle">Every change is saved as a revision. Open a design to keep editing.</p>
 
-      <form className="card new-design" onSubmit={create}>
-        <div className="card-title">New design</div>
-        <p className="card-desc">Starts from the sample 52&apos;6&quot; × 35&apos; 3BHK flat; reshape it by conversation.</p>
-        <div className="row">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Lalitha Apartment Design 1" aria-label="Design name" maxLength={120} />
-          <button className="btn-primary" disabled={busy}>Create</button>
-        </div>
-      </form>
+      <NewDesign onCreate={create} busy={busy} />
 
       {error && <p className="form-error" role="alert">{error}</p>}
 

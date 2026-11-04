@@ -7,5 +7,5 @@ export const GET = withUser(async (user) => ({ designs: await listDesigns(user.i
 
 export const POST = withUser(async (user, req) => {
   const body = await readJson(req);
-  return { id: await createDesign(user.id, body.name) };
+  return { id: await createDesign(user.id, body) };
 });

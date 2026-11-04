@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
+  buildingOuterRect,
   diffModels,
   formatLength,
   revisionLetter,
@@ -101,9 +102,8 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     }, 0);
     return Math.round(mm2 / 92903.04);
   }, [model]);
-  const xs = model.walls.flatMap((w) => [w.a.x, w.b.x]);
-  const ys = model.walls.flatMap((w) => [w.a.y, w.b.y]);
-  const overall = `${formatLength(Math.max(...xs) - Math.min(...xs), model.displayUnits)} × ${formatLength(Math.max(...ys) - Math.min(...ys), model.displayUnits)}`;
+  const outer = buildingOuterRect(model);
+  const overall = `${formatLength(outer.x1 - outer.x0, model.displayUnits)} × ${formatLength(outer.y1 - outer.y0, model.displayUnits)} outside`;
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: 'smooth' });

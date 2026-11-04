@@ -1,13 +1,12 @@
 'use client';
 
 import { useMemo } from 'react';
-import { formatLength, revisionLetter, roomClearRect, roomSizeText, type BuildingModel } from '@ds/core';
+import { buildingOuterRect, formatLength, revisionLetter, roomClearRect, roomSizeText, type BuildingModel } from '@ds/core';
 import PlanView from './PlanView';
 
 export default function SharedView({ name, revision, pinned, model }: { name: string; revision: number; pinned: boolean; model: BuildingModel }) {
   const empty = useMemo(() => new Set<string>(), []);
-  const xs = model.walls.flatMap((w) => [w.a.x, w.b.x]);
-  const ys = model.walls.flatMap((w) => [w.a.y, w.b.y]);
+  const outer = buildingOuterRect(model);
   const u = model.displayUnits;
   const carpet = model.rooms
     .filter((r) => r.kind !== 'lobby')
@@ -25,7 +24,7 @@ export default function SharedView({ name, revision, pinned, model }: { name: st
       <main className="sa-main shared-main">
         <h1>{name}</h1>
         <p className="sa-subtitle">
-          {model.levelName} · Rev {revisionLetter(revision)}{pinned ? '' : ' (latest)'} · {formatLength(Math.max(...xs) - Math.min(...xs), u)} × {formatLength(Math.max(...ys) - Math.min(...ys), u)} · view only
+          {model.levelName} · Rev {revisionLetter(revision)}{pinned ? '' : ' (latest)'} · {formatLength(outer.x1 - outer.x0, u)} × {formatLength(outer.y1 - outer.y0, u)} outside · view only
         </p>
         <section className="card plan-card">
           <PlanView model={model} changedIds={empty} issues={[]} />

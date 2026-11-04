@@ -35,6 +35,7 @@ import {
   buildableRect,
   compassToSide,
   eastWestIsPlanX,
+  buildingOuterRect,
   footprintOnPlot,
   namedPlotPoint,
   type TreePosition,
@@ -374,6 +375,22 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       break;
     }
 
+    case 'fit_to_buildable': {
+      const site = ctx.site();
+      const b = buildableRect(site);
+      const before = buildingOuterRect(model);
+      fitBuilding(model, b.x1 - b.x0, b.y1 - b.y0, ctx);
+      const f = footprintOnPlot(model, site);
+      site.buildingOffset = { x: Math.round(site.buildingOffset.x + b.x0 - f.x0), y: Math.round(site.buildingOffset.y + b.y0 - f.y0) };
+      const after = buildingOuterRect(model);
+      for (const w of model.walls) ctx.touch(w.id);
+      for (const r of model.rooms) ctx.touch(r.id);
+      ctx.touch('site');
+      ctx.summary = `Resized the layout to fill the buildable area: ${formatLength(after.x1 - after.x0, model.displayUnits)} × ${formatLength(after.y1 - after.y0, model.displayUnits)} outside (was ${formatLength(before.x1 - before.x0, model.displayUnits)} × ${formatLength(before.y1 - before.y0, model.displayUnits)}).`;
+      ctx.note('Rooms scaled in proportion; wall thicknesses and door, window and furniture sizes are unchanged.');
+      break;
+    }
+
     case 'rename_room': {
       const room = getRoom(model, args.roomId);
       const before = room.name;
@@ -533,6 +550,67 @@ class Ctx {
     for (const room of this.model.rooms) {
       if (Object.values(room.bounds).some((id) => this.changed.has(id))) this.touch(room.id);
     }
+  }
+}
+
+/**
+ * Scale the layout so its outer faces measure outerW × outerH. Wall axes are
+ * scaled about the layout's top-left axis corner; thicknesses, opening widths
+ * and furniture sizes are kept. Openings that no longer fit are pulled in.
+ */
+function fitBuilding(model: BuildingModel, outerW: number, outerH: number, ctx: Ctx) {
+  const R = buildingOuterRect(model);
+  const xs = model.walls.flatMap((w) => [w.a.x, w.b.x]);
+  const ys = model.walls.flatMap((w) => [w.a.y, w.b.y]);
+  const A = { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+  const sx = (outerW - (A.x0 - R.x0) - (R.x1 - A.x1)) / (A.x1 - A.x0);
+  const sy = (outerH - (A.y0 - R.y0) - (R.y1 - A.y1)) / (A.y1 - A.y0);
+  const u = model.displayUnits;
+  if (!(sx > 0.6 && sx < 1.6 && sy > 0.6 && sy < 1.6)) {
+    throw new ModelError(
+      `The buildable area (${formatLength(outerW, u)} × ${formatLength(outerH, u)}) is too different from this layout (${formatLength(R.x1 - R.x0, u)} × ${formatLength(R.y1 - R.y0, u)}) to stretch it sensibly. Try a template closer in size.`,
+    );
+  }
+  const X = (x: number) => Math.round(A.x0 + (x - A.x0) * sx);
+  const Y = (y: number) => Math.round(A.y0 + (y - A.y0) * sy);
+  const horizontalBefore = new Map(model.walls.map((w) => [w.id, isHorizontal(w)]));
+  const roomBefore = new Map(model.rooms.map((r) => [r.id, roomClearRect(model, r)]));
+  for (const w of model.walls) {
+    w.a = { x: X(w.a.x), y: Y(w.a.y) };
+    w.b = { x: X(w.b.x), y: Y(w.b.y) };
+  }
+  for (const o of model.openings) {
+    const w = getWall(model, o.wallId);
+    const s = horizontalBefore.get(w.id) ? sx : sy;
+    const len = wallLength(w);
+    let offset = Math.round(o.offset * s);
+    if (o.width > len - 2 * JAMB_MIN) {
+      o.width = Math.max(600, Math.round(len - 2 * JAMB_MIN));
+      ctx.note(`${o.label} narrowed to fit its shorter wall.`);
+    }
+    offset = Math.min(Math.max(offset, JAMB_MIN + o.width / 2), len - JAMB_MIN - o.width / 2);
+    o.offset = Math.round(offset);
+  }
+  // Furniture keeps its distance to the nearer wall of its room on each axis,
+  // so a bed against a wall stays against it.
+  for (const f of model.furniture) {
+    const before = roomBefore.get(f.roomId);
+    const room = model.rooms.find((r) => r.id === f.roomId);
+    if (!before || !room) {
+      f.at = { x: X(f.at.x), y: Y(f.at.y) };
+      continue;
+    }
+    const after = roomClearRect(model, room);
+    const fr = itemFootprint(f);
+    const w = fr.x1 - fr.x0;
+    const h = fr.y1 - fr.y0;
+    const gl = fr.x0 - before.x0;
+    const gr = before.x1 - fr.x1;
+    const gt = fr.y0 - before.y0;
+    const gb = before.y1 - fr.y1;
+    const x = gl <= gr ? after.x0 + gl + w / 2 : after.x1 - gr - w / 2;
+    const y = gt <= gb ? after.y0 + gt + h / 2 : after.y1 - gb - h / 2;
+    f.at = { x: Math.round(x), y: Math.round(y) };
   }
 }
 
