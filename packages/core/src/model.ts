@@ -93,6 +93,10 @@ export interface Tree {
   /** Trunk/root protection radius: building inside it is an error. */
   protectRadius: Mm;
   keep: boolean;
+  /** Named position it was placed at (e.g. "north-west corner"), if any. */
+  position?: string;
+  /** Trunk distance from the boundary used with `position`. */
+  inset?: Mm;
 }
 
 export interface Access {

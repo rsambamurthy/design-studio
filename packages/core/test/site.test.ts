@@ -113,3 +113,30 @@ describe('site: plot and setbacks', () => {
     expect(s).toMatch(/tree-1: Mango tree \(keep\)/);
   });
 });
+
+describe('update_tree', () => {
+  it('changes position, distance, canopy and keep in one step', () => {
+    const m = run(sampleModel(), ['set_plot', { eastWest: "60'", northSouth: "40'" }], ['add_tree', { label: 'Mango tree', position: 'north-west corner' }]);
+    const id = m.site!.trees[0]!.id;
+    const r = applyOperation(m, op('update_tree', { treeId: id, label: 'Old mango', position: 'south-east corner', inset: "3'", canopy: "16'", keep: false }));
+    const t = r.model.site!.trees[0]!;
+    expect(t.label).toBe('Old mango');
+    expect(t.at).toEqual({ x: 18288 - 914, y: 12192 - 914 });
+    expect(t.canopyRadius).toBe(2439);
+    expect(t.keep).toBe(false);
+    expect(r.summary).toMatch(/south-east corner, trunk 3'0" from the boundary; canopy 16'0" across; no longer marked to keep/);
+  });
+
+  it('keeps the named position when only the distance changes', () => {
+    const m = run(sampleModel(), ['set_plot', { eastWest: "60'", northSouth: "40'" }], ['add_tree', { label: 'Neem', position: 'west side' }]);
+    const id = m.site!.trees[0]!.id;
+    const r = applyOperation(m, op('update_tree', { treeId: id, inset: "2'" }));
+    expect(r.model.site!.trees[0]!.at.x).toBe(610);
+    expect(r.model.site!.trees[0]!.position).toBe('west side');
+  });
+
+  it('says so when nothing changed', () => {
+    const m = run(sampleModel(), ['set_plot', { eastWest: "60'", northSouth: "40'" }], ['add_tree', { label: 'Neem', position: 'west side' }]);
+    expect(() => applyOperation(m, op('update_tree', { treeId: m.site!.trees[0]!.id, label: 'Neem' }))).toThrow(/Nothing changed/);
+  });
+});

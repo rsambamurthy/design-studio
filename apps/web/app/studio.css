@@ -261,3 +261,4 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .nd-plinth.bad { background: #fee2e2; color: #991b1b; }
 .tpl-grid { grid-template-columns: repeat(4, 1fr); }
 @media (max-width: 900px) { .tpl-grid { grid-template-columns: 1fr 1fr; } }
+.tree-list li.tree-edit { display: block; padding: 8px; border: 1px solid var(--theme-accent); border-radius: var(--radius); background: #fff8f4; }

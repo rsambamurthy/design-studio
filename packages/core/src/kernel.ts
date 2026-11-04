@@ -303,7 +303,7 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       const canopy = args.canopy ? ctx.length(args.canopy) : 6096;
       const at = namedPlotPoint(site, args.position as TreePosition, inset, model.northAngle);
       const id = ctx.newId('tree');
-      site.trees.push({ id, label: args.label, at, canopyRadius: Math.round(canopy / 2), protectRadius: 1500, keep: args.keep ?? true });
+      site.trees.push({ id, label: args.label, at, canopyRadius: Math.round(canopy / 2), protectRadius: 1500, keep: args.keep ?? true, position: args.position, inset });
       ctx.touch('site', id);
       ctx.summary = `Added ${args.label} at the ${args.position}.`;
       ctx.note(
@@ -321,6 +321,38 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       t.at = { x: Math.round(t.at.x + v.x * d), y: Math.round(t.at.y + v.y * d) };
       ctx.touch('site', t.id);
       ctx.summary = `Moved ${t.label} ${formatLength(d, model.displayUnits)} ${args.direction}.`;
+      break;
+    }
+
+    case 'update_tree': {
+      const site = ctx.site();
+      const t = site.trees.find((x) => x.id === args.treeId);
+      if (!t) throw new ModelError(`No tree with id "${args.treeId}"`);
+      const changes: string[] = [];
+      if (args.label && args.label !== t.label) {
+        changes.push(`renamed to ${args.label}`);
+        t.label = args.label;
+      }
+      if (args.position || args.inset) {
+        const position = (args.position ?? t.position ?? 'centre') as TreePosition;
+        const inset = args.inset ? ctx.length(args.inset) : t.inset ?? 1219;
+        t.at = namedPlotPoint(site, position, inset, model.northAngle);
+        t.position = position;
+        t.inset = inset;
+        changes.push(`placed at the ${position}, trunk ${formatLength(inset, model.displayUnits)} from the boundary`);
+      }
+      if (args.canopy) {
+        const canopy = ctx.length(args.canopy);
+        t.canopyRadius = Math.round(canopy / 2);
+        changes.push(`canopy ${formatLength(canopy, model.displayUnits)} across`);
+      }
+      if (args.keep !== undefined && args.keep !== t.keep) {
+        t.keep = args.keep;
+        changes.push(args.keep ? 'marked to keep' : 'no longer marked to keep');
+      }
+      if (changes.length === 0) throw new ModelError(`Nothing changed for ${t.label}.`);
+      ctx.touch('site', t.id);
+      ctx.summary = `${t.label}: ${changes.join('; ')}.`;
       break;
     }
 

@@ -53,6 +53,7 @@ export default function SitePanel({ model, busy, apply, revLabel }: Props) {
     west: { kind: 'none', width: '' },
   });
   const [tree, setTree] = useState({ label: '', position: 'north-west corner', inset: "4'", canopy: "20'" });
+  const [editTree, setEditTree] = useState<{ id: string; label: string; position: string; inset: string; canopy: string; keep: boolean } | null>(null);
   const [place, setPlace] = useState({ northSouth: 'centre', eastWest: 'centre' });
   const [error, setError] = useState('');
   const [result, setResult] = useState<ApplyResult | null>(null);
@@ -143,6 +144,28 @@ export default function SitePanel({ model, busy, apply, revLabel }: Props) {
     setTree((t) => ({ ...t, label: '' }));
   });
 
+  const saveTree = guard(async () => {
+    if (!editTree || !site) return;
+    const t = site.trees.find((x) => x.id === editTree.id);
+    if (!t) throw new Error('That tree no longer exists.');
+    const args: Record<string, unknown> = { treeId: t.id };
+    if (!editTree.label.trim()) throw new Error('Give the tree a name.');
+    if (editTree.label.trim() !== t.label) args.label = editTree.label.trim();
+    const inset = check('Trunk from boundary', editTree.inset);
+    const canopy = check('Canopy across', editTree.canopy);
+    const insetChanged = Math.abs(parseLength(inset).mm - (t.inset ?? 1219)) > 1;
+    if (!editTree.position && insetChanged) throw new Error('Choose where the tree is ("Where") to change its distance from the boundary.');
+    if (editTree.position && (editTree.position !== t.position || insetChanged)) {
+      args.position = editTree.position;
+      args.inset = inset;
+    }
+    if (Math.abs(parseLength(canopy).mm - t.canopyRadius * 2) > 2) args.canopy = canopy;
+    if (editTree.keep !== t.keep) args.keep = editTree.keep;
+    if (Object.keys(args).length === 1) throw new Error('Nothing changed.');
+    await run(`Edit ${t.label}`, [{ op: 'update_tree', args }]);
+    setEditTree(null);
+  });
+
   const placeBuilding = guard(async () => {
     await run('Position building', [{ op: 'place_building', args: place }]);
   });
@@ -214,18 +237,64 @@ export default function SitePanel({ model, busy, apply, revLabel }: Props) {
               <p className="card-desc">None yet.</p>
             ) : (
               <ul className="tree-list">
-                {site.trees.map((t) => (
-                  <li key={t.id}>
-                    <span>🌳 {t.label}</span>
-                    <button
-                      className="linkish danger-text"
-                      disabled={busy}
-                      onClick={() => void run(`Remove ${t.label}`, [{ op: 'remove_tree', args: { treeId: t.id } }])}
-                    >
-                      Remove
-                    </button>
-                  </li>
-                ))}
+                {site.trees.map((t) =>
+                  editTree?.id === t.id ? (
+                    <li key={t.id} className="tree-edit">
+                      <form onSubmit={saveTree} className="tree-form">
+                        <div className="field-grid two">
+                          <label>Tree<input value={editTree.label} onChange={(e) => setEditTree({ ...editTree, label: e.target.value })} aria-label="Tree name" /></label>
+                          <label>
+                            Where
+                            <select value={editTree.position} onChange={(e) => setEditTree({ ...editTree, position: e.target.value })} aria-label="Tree position">
+                              {!t.position && <option value="">Keep where it is</option>}
+                              {TREE_POSITIONS.map((p) => (
+                                <option key={p} value={p}>{p}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>Trunk from boundary<input value={editTree.inset} onChange={(e) => setEditTree({ ...editTree, inset: e.target.value })} aria-label="Trunk from boundary" /></label>
+                          <label>Canopy across<input value={editTree.canopy} onChange={(e) => setEditTree({ ...editTree, canopy: e.target.value })} aria-label="Canopy across" /></label>
+                        </div>
+                        <label className="nd-check">
+                          <input type="checkbox" checked={editTree.keep} onChange={(e) => setEditTree({ ...editTree, keep: e.target.checked })} /> Must be kept (building stays clear of the trunk)
+                        </label>
+                        <div className="row wrap">
+                          <button className="btn-primary btn-sm" disabled={busy}>Save tree</button>
+                          <button type="button" className="btn-secondary btn-sm" onClick={() => setEditTree(null)}>Cancel</button>
+                        </div>
+                      </form>
+                    </li>
+                  ) : (
+                    <li key={t.id}>
+                      <span>🌳 {t.label}{t.keep ? '' : ' (may be removed)'}</span>
+                      <span className="row">
+                        <button
+                          className="linkish"
+                          disabled={busy}
+                          onClick={() =>
+                            setEditTree({
+                              id: t.id,
+                              label: t.label,
+                              position: t.position ?? '',
+                              inset: fmt(t.inset ?? 1219),
+                              canopy: fmt(t.canopyRadius * 2),
+                              keep: t.keep,
+                            })
+                          }
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="linkish danger-text"
+                          disabled={busy}
+                          onClick={() => void run(`Remove ${t.label}`, [{ op: 'remove_tree', args: { treeId: t.id } }])}
+                        >
+                          Remove
+                        </button>
+                      </span>
+                    </li>
+                  ),
+                )}
               </ul>
             )}
             <form onSubmit={addTree} className="tree-form">

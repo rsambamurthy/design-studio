@@ -82,6 +82,18 @@ export const OperationSchemas = {
     })
     .describe('Add an existing tree on the plot.'),
   move_tree: z.object({ treeId: id('tree'), direction: compass, distance }).describe('Move a tree marker.'),
+  update_tree: z
+    .object({
+      treeId: id('tree'),
+      label: z.string().min(1).optional(),
+      position: z
+        .enum(['north-west corner', 'north-east corner', 'south-west corner', 'south-east corner', 'north side', 'south side', 'east side', 'west side', 'centre'])
+        .optional(),
+      inset: distance.optional().describe('Trunk distance from the boundary'),
+      canopy: distance.optional().describe('Canopy diameter'),
+      keep: z.boolean().optional(),
+    })
+    .describe('Change an existing tree: name, position, distance from boundary, canopy size, or whether it must be kept.'),
   remove_tree: z.object({ treeId: id('tree') }).describe('Remove a tree from the site.'),
   place_building: z
     .object({
