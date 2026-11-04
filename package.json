@@ -10,7 +10,11 @@
   "scripts": {
     "dev": "npm run dev -w @ds/web",
     "build": "npm run build -w @ds/web",
+    "start": "npm run start -w @ds/web",
     "test": "npm test -w @ds/core",
     "typecheck": "npm run typecheck -w @ds/core && npm run typecheck -w @ds/web"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
