@@ -3,6 +3,7 @@ import {
   TEMPLATES,
   applyOperation,
   coreFootprint,
+  enclosureOf,
   findEntities,
   modelSummary,
   parseOperation,
@@ -19,31 +20,62 @@ const room = (m: BuildingModel, name: string) => m.rooms.find((r) => r.name === 
 const errors = (m: BuildingModel) => runChecks(m).filter((i) => i.severity === 'error');
 
 describe('stair and lift', () => {
-  it('3BHK template has separate Lobby, Stair and Lift units, with no errors', () => {
+  it('3BHK template has a walled stair and lift in the lobby, with no errors', () => {
     const m = TEMPLATES.find((t) => t.id === '3bhk')!.build();
     expect(m.cores!.map((c) => c.kind).sort()).toEqual(['lift', 'stair']);
-    for (const c of m.cores!) expect(m.rooms.find((r) => r.id === c.roomId)!.kind).toBe(c.kind);
-    expect(m.rooms.map((r) => r.name)).toEqual(expect.arrayContaining(['Lobby', 'Stair', 'Lift']));
-    expect(m.openings.map((o) => o.label)).toEqual(expect.arrayContaining(['Stair entry', 'Lift door']));
-    expect(m.openings.find((o) => o.label === 'Stair entry')!.kind).toBe('opening');
+    expect(m.cores!.every((c) => c.roomId === 'r-lobby' && !!c.enclosure)).toBe(true);
+    expect(room(m, 'Lobby')).toBeTruthy();
+    for (const c of m.cores!) expect(enclosureOf(m, c).walls.length).toBeGreaterThan(0);
+    expect(runChecks(m).filter((i) => i.code.startsWith('core'))).toEqual([]);
     expect(errors(m)).toEqual([]);
-    expect(runChecks(m).some((i) => i.code === 'core.own-room')).toBe(false);
   });
 
-  it('a stair or lift sitting inside an ordinary room is flagged', () => {
-    const m = apply(sampleModel(), 'add_lift', { roomId: 'r-lobby' }).model;
+  it('an open (unwalled) stair in an ordinary room is flagged', () => {
+    const m = apply(sampleModel(), 'add_stair', { roomId: 'r-living', enclosed: false }).model;
     const own = runChecks(m).filter((i) => i.code === 'core.own-room');
     expect(own).toHaveLength(1);
     expect(own[0]!.message).toMatch(/usually its own enclosed unit/);
   });
 
-  it('carves the core units to fit narrow and wide plinths', () => {
-    for (const [ew, ns, sb] of [["60'", "40'", "5'"], ["30'", "60'", "3'"], ["40'", "60'", "5'"]] as const) {
-      const { model } = startDesign('auto', [op('set_plot', { eastWest: ew, northSouth: ns }), op('set_setback', { side: 'all', distance: sb })], 'T');
-      expect(model.rooms.some((r) => r.kind === 'stair')).toBe(true);
-      expect(model.rooms.some((r) => r.kind === 'lift')).toBe(true);
-      expect(errors(model)).toEqual([]);
+  it('the stair and lift fit narrow and wide plinths', () => {
+    for (const [ew, ns, sb] of [["60'", "40'", "5'"], ["30'", "60'", "3'"], ["40'", "60'", "5'"], ["60'", "40'", "0"]] as const) {
+      const { model } = startDesign('3bhk', [op('set_plot', { eastWest: ew, northSouth: ns }), op('set_setback', { side: 'all', distance: sb })], 'T');
+      expect(model.cores!.length).toBe(2);
+      expect(errors(model), `${ew} × ${ns}`).toEqual([]);
     }
+  });
+
+  it('a lift can be moved into another room, and snaps flush to a wall', () => {
+    const m = TEMPLATES.find((t) => t.id === '3bhk')!.build();
+    const lift = m.cores!.find((c) => c.kind === 'lift')!;
+    // Far west, into the living room.
+    const r = apply(m, 'move_core', { coreId: lift.id, direction: 'west', distance: "20'" });
+    const moved = r.model.cores!.find((c) => c.id === lift.id)!;
+    expect(moved.roomId).toBe('r-living');
+    expect(r.summary).toMatch(/into Living \/ Dining/);
+    // Nudge it near the living room's north wall: it snaps flush.
+    const down = apply(r.model, 'move_core', { coreId: lift.id, direction: 'south', distance: '1000 mm' }).model;
+    const liv = roomClearRect(down, room(down, 'Living / Dining'));
+    const gap = coreFootprint(down.cores!.find((c) => c.id === lift.id)!).y0 - liv.y0;
+    const r2 = apply(down, 'move_core', { coreId: lift.id, direction: 'north', distance: `${Math.round(gap - 60)} mm` });
+    const f2 = coreFootprint(r2.model.cores!.find((c) => c.id === lift.id)!);
+    expect(Math.abs(f2.y0 - liv.y0)).toBeLessThanOrEqual(1);
+  });
+
+  it('warns when the lift door faces a wall', () => {
+    const m = TEMPLATES.find((t) => t.id === '3bhk')!.build();
+    const lift = m.cores!.find((c) => c.kind === 'lift')!;
+    const r = apply(m, 'rotate_core', { coreId: lift.id, degrees: '180' });
+    expect(runChecks(r.model).some((i) => i.code === 'core.entry-blocked')).toBe(true);
+  });
+
+  it('starting a design can drop the lift, or both', () => {
+    const plot = [op('set_plot', { eastWest: "60'", northSouth: "40'" })];
+    expect(startDesign('3bhk', plot, 'T', { core: 'stair' }).model.cores!.map((c) => c.kind)).toEqual(['stair']);
+    expect(startDesign('3bhk', plot, 'T', { core: 'none' }).model.cores ?? []).toEqual([]);
+    const two = startDesign('2bhk', plot, 'T', { core: 'stair' }).model;
+    expect(two.cores!.map((c) => c.kind)).toEqual(['stair']);
+    expect(errors(two)).toEqual([]);
   });
 
   it('sizes a dog-legged stair from floor height', () => {

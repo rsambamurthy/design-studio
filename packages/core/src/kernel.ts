@@ -44,7 +44,7 @@ import {
   type TreePosition,
 } from './site';
 import { parseOperation as parseOp, type Operation } from './ops';
-import { CORNERS, DEFAULT_FLOOR_HEIGHT, LIFT_SHAFTS, coreFootprint, coresOf, placeInCorner, sizeStair, type Corner } from './cores';
+import { CORNERS, DEFAULT_FLOOR_HEIGHT, LIFT_SHAFTS, coreFootprint, coresOf, enclosureOf, placeInCorner, settleCore, sizeStair, type Corner } from './cores';
 import { formatLength, parseLength } from './units';
 
 export interface OpResult {
@@ -466,6 +466,7 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
         width: dims.width,
         length: dims.length,
         stair: { type, flightWidth, floorHeight, risers: dims.risers, riser: dims.riser, tread: dims.tread },
+        ...(args.enclosed === false ? {} : { enclosure: { thickness: 115 } }),
       };
       ctx.placeCore(core, room, args.corner as Corner | undefined);
       model.cores = [...coresOf(model), core];
@@ -490,6 +491,7 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
         width: shaft.w,
         length: shaft.d,
         lift: { persons },
+        enclosure: { thickness: 115 },
       };
       ctx.placeCore(core, room, args.corner as Corner | undefined);
       model.cores = [...coresOf(model), core];
@@ -504,9 +506,12 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       const c = ctx.core(args.coreId);
       const d = ctx.length(args.distance);
       const v = compassVector(args.direction, model.northAngle);
+      const from = c.roomId;
       c.at = { x: Math.round(c.at.x + v.x * d), y: Math.round(c.at.y + v.y * d) };
-      ctx.touch(c.id);
-      ctx.summary = `Moved the ${c.label.toLowerCase()} ${formatLength(d, model.displayUnits)} ${args.direction}.`;
+      settleCore(model, c);
+      ctx.touch(c.id, c.roomId, from);
+      const into = c.roomId !== from ? ` into ${getRoom(model, c.roomId).name}` : '';
+      ctx.summary = `Moved the ${c.label.toLowerCase()} ${formatLength(d, model.displayUnits)} ${args.direction}${into}.`;
       break;
     }
 
@@ -522,6 +527,7 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
     case 'rotate_core': {
       const c = ctx.core(args.coreId);
       c.rotation = (((c.rotation + Number(args.degrees)) % 360) + 360) % 360;
+      settleCore(model, c);
       ctx.touch(c.id);
       ctx.summary = `Turned the ${c.label.toLowerCase()} ${args.degrees}°.`;
       break;
@@ -682,8 +688,8 @@ class Ctx {
     for (const k of CORNERS) {
       try {
         placeInCorner(this.model, c, room, k);
-        const others = coresOf(this.model).filter((o) => o.roomId === room.id);
-        if (others.every((o) => !rectsOverlap(coreFootprint(o), coreFootprint(c), 5))) return;
+        const others = coresOf(this.model).filter((o) => o.roomId === room.id && o.id !== c.id);
+        if (others.every((o) => !rectsOverlap(enclosureOf(this.model, o).outer, enclosureOf(this.model, c).outer, 5))) return;
       } catch (err) {
         last = err;
       }
@@ -887,6 +893,7 @@ function fitBuilding(model: BuildingModel, outerW: number, outerH: number, ctx: 
   }
 
   fitCoreRooms(model, ctx);
+  replaceClashingCores(model, ctx);
 
   // Items that no longer fit their resized room: try turning them, else leave them out.
   const fits = (f: FurnitureItem, r: Rect) => {
@@ -978,6 +985,37 @@ function fitCoreRooms(model: BuildingModel, ctx: Ctx) {
   }
 }
 type PlanSide4 = 'top' | 'bottom' | 'left' | 'right';
+
+/**
+ * After a resize, a stair or lift that now clashes with another or no longer
+ * fits its room is put in a free corner of its room, else of the living room.
+ */
+function replaceClashingCores(model: BuildingModel, ctx: Ctx) {
+  const cores = coresOf(model);
+  cores.forEach((c, i) => {
+    const room = model.rooms.find((r) => r.id === c.roomId);
+    if (!room) return;
+    const rr = roomClearRect(model, room);
+    const outer = enclosureOf(model, c).outer;
+    const outside = outer.x0 < rr.x0 - 5 || outer.x1 > rr.x1 + 5 || outer.y0 < rr.y0 - 5 || outer.y1 > rr.y1 + 5;
+    const clash = cores.slice(0, i).some((d) => rectsOverlap(outer, enclosureOf(model, d).outer, 5));
+    if (!outside && !clash) return;
+    const saved = { at: c.at, rotation: c.rotation, roomId: c.roomId };
+    const others = model.rooms.filter((r) => r.id !== room.id && (r.kind === 'living' || r.kind === 'lobby'));
+    for (const target of [room, ...others]) {
+      try {
+        ctx.placeCore(c, target);
+        const ok = cores.slice(0, i).every((d) => !rectsOverlap(enclosureOf(model, c).outer, enclosureOf(model, d).outer, 5));
+        if (!ok) throw new ModelError('clash');
+        ctx.touch(c.id);
+        if (target.id !== room.id) ctx.note(`The ${c.label.toLowerCase()} didn't fit ${room.name} at this size; put in ${target.name}. Drag it where you want it.`);
+        return;
+      } catch {
+        Object.assign(c, saved);
+      }
+    }
+  });
+}
 
 const OPPOSITE = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' } as const;
 const SIDES4 = ['top', 'bottom', 'left', 'right'] as const;

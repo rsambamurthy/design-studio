@@ -7,7 +7,7 @@ import { getCatalogueItem, itemFootprint } from './catalogue';
 import { rectSize, rectsOverlap, roomClearRect, wallDir, pointOnWall, type Rect } from './geometry';
 import { getWall, type BuildingModel, type FurnitureItem, type Opening, type PlanSide, type Point } from './model';
 import { PLAN_SIDES, boundaryGaps, circleHitsRect, footprintOnPlot, sideToCompass } from './site';
-import { MAX_RISER, coreFootprint, coresOf } from './cores';
+import { MAX_RISER, coresOf, enclosureOf } from './cores';
 import { formatLength } from './units';
 
 export type Severity = 'error' | 'warning' | 'advisory';
@@ -103,9 +103,19 @@ function coreChecks(model: BuildingModel, swings: { o: Opening; rect: Rect }[]):
   const u = model.displayUnits;
   const cores = coresOf(model);
   for (const c of cores) {
-    const fp = coreFootprint(c);
+    const enc = enclosureOf(model, c);
+    const fp = enc.outer;
     const room = model.rooms.find((r) => r.id === c.roomId);
-    if (room && room.kind !== c.kind) {
+    if (enc.entryBlocked) {
+      out.push({
+        code: 'core.entry-blocked',
+        severity: 'warning',
+        message: `The ${c.label.toLowerCase()}'s ${c.kind === 'lift' ? 'door' : 'entry'} faces a wall; turn it.`,
+        entityIds: [c.id],
+        at: c.at,
+      });
+    }
+    if (room && room.kind !== c.kind && !c.enclosure) {
       out.push({
         code: 'core.own-room',
         severity: 'advisory',
@@ -122,7 +132,7 @@ function coreChecks(model: BuildingModel, swings: { o: Opening; rect: Rect }[]):
     }
     for (const d of cores) {
       if (d.id <= c.id) continue;
-      if (rectsOverlap(fp, coreFootprint(d), OVERLAP_TOL)) {
+      if (rectsOverlap(fp, enclosureOf(model, d).outer, OVERLAP_TOL)) {
         out.push({ code: 'core.overlap', severity: 'error', message: `The ${c.label.toLowerCase()} overlaps the ${d.label.toLowerCase()}.`, entityIds: [c.id, d.id], at: c.at });
       }
     }

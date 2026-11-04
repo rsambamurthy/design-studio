@@ -100,6 +100,8 @@ export interface RoomCounts {
   bedrooms?: number;
   /** Total toilets; extra ones are attached to bedrooms, fewer turns the common toilet into a store. */
   toilets?: number;
+  /** Stair and lift: both, stair only, or none. Left out = as the layout comes. */
+  core?: 'both' | 'stair' | 'none';
 }
 
 export function startDesign(templateId: string, siteOps: Operation[], name: string, counts: RoomCounts = {}): StartResult {
@@ -117,6 +119,7 @@ export function startDesign(templateId: string, siteOps: Operation[], name: stri
   if (!site) {
     if (auto) throw new ModelError('Enter the plot size so a layout can be chosen for it.');
     notes.push(`Started from the ${first.name} template`);
+    if (counts.core) model = adjustCores(model, counts.core, notes);
     if (counts.toilets) model = adjustToilets(model, counts.toilets, notes);
     return { model: { ...model, revision: 1 }, ops: siteOps, notes };
   }
@@ -147,6 +150,7 @@ export function startDesign(templateId: string, siteOps: Operation[], name: stri
   model = applyOperation(model, fit).model;
   if (template.finish) model = template.finish(model);
   notes.push(`sized to the ${formatLength(pw, 'ft-in')} × ${formatLength(ph, 'ft-in')} plinth`);
+  if (counts.core) model = adjustCores(model, counts.core, notes);
   if (counts.toilets) model = adjustToilets(model, counts.toilets, notes);
   return { model: { ...model, revision: 1 }, ops: [...siteOps, fit], notes };
 }
@@ -192,6 +196,33 @@ export function adjustToilets(input: BuildingModel, wanted: number, notes: strin
       notes.push(bed.kind === 'bedroom' ? `toilet attached to ${bed.name}` : `common toilet off ${bed.name}`);
     } catch {
       failures.push(bed.id);
+    }
+  }
+  return m;
+}
+
+/** Add or remove the stair and lift to match the choice. New ones go in the lobby, else the living room. */
+export function adjustCores(input: BuildingModel, choice: 'both' | 'stair' | 'none', notes: string[] = []): BuildingModel {
+  let m = input;
+  const run = (name: string, args: Record<string, unknown>) => {
+    m = applyOperation(m, parseOperation(name, args)).model;
+  };
+  const want = { stair: choice !== 'none', lift: choice === 'both' };
+  for (const c of [...(m.cores ?? [])]) {
+    if (!want[c.kind]) {
+      run('remove', { entityId: c.id });
+      notes.push(`no ${c.kind}`);
+    }
+  }
+  const host = m.rooms.find((r) => r.kind === 'lobby') ?? m.rooms.find((r) => r.kind === 'living');
+  if (!host) return m;
+  for (const kind of ['stair', 'lift'] as const) {
+    if (!want[kind] || (m.cores ?? []).some((c) => c.kind === kind)) continue;
+    try {
+      run(kind === 'stair' ? 'add_stair' : 'add_lift', { roomId: host.id });
+      notes.push(`${kind} added in ${host.name}`);
+    } catch (err) {
+      throw new ModelError(`No room for the ${kind} in ${host.name}: ${err instanceof Error ? err.message : err}`);
     }
   }
   return m;

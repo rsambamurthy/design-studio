@@ -102,6 +102,12 @@ export interface CoreElement {
   length: Mm;
   stair?: { type: 'dog-legged' | 'straight'; flightWidth: Mm; floorHeight: Mm; risers: number; riser: Mm; tread: Mm };
   lift?: { persons: number };
+  /**
+   * Present when the stair or lift is a self-contained unit with its own walls.
+   * Walls are drawn on the sides that aren't already against a room wall; the
+   * entry is on the local front (+y): the foot of the stair, the lift door.
+   */
+  enclosure?: { thickness: Mm };
 }
 
 export interface Tree {

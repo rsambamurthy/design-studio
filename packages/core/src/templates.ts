@@ -6,8 +6,6 @@ import type { BuildingModel } from './model';
 import { applyOperation, resizeLayout } from './kernel';
 import { parseOperation } from './ops';
 import { EXT, INT, L, PLUMB, opening, room, sampleModel, wall } from './seed';
-import { planSideCompass, roomClearRect } from './geometry';
-import { DEFAULT_FLOOR_HEIGHT, LIFT_SHAFTS, sizeStair } from './cores';
 
 export interface Template {
   id: string;
@@ -115,105 +113,24 @@ function oneBhk(): BuildingModel {
   };
 }
 
-/** 3BHK before its core is divided up: one lobby room for the common core. */
-function threeBhkBase(): BuildingModel {
-  const m: BuildingModel = { ...resizeLayout(sampleModel(), L("48'"), L("34'")).model, id: 'template-3bhk', name: '3BHK Flat', levelName: 'Typical floor' };
-  return applyOperation(m, parseOperation('rename_room', { roomId: 'r-lobby', name: 'Lobby' })).model;
-}
-
-/**
- * Divide a lobby into separate units sized to what they hold: a Stair room
- * (dog-legged stair), a Lift shaft, a Duct / Store when space is left, and the
- * Lobby itself, with a stair entry, lift door and store door off the lobby.
- * Runs after the layout is sized, so the units fit the actual lobby.
- */
-export function carveCoreUnits(input: BuildingModel, lobbyId: string, mainDoorId = 'd-main'): BuildingModel {
-  let m = input;
+/** 3BHK with a lobby holding a walled staircase and lift shaft, both movable. */
+function threeBhk(): BuildingModel {
+  let m: BuildingModel = { ...resizeLayout(sampleModel(), L("48'"), L("34'")).model, id: 'template-3bhk', name: '3BHK Flat', levelName: 'Typical floor' };
   const op = (name: string, args: Record<string, unknown>) => {
     m = applyOperation(m, parseOperation(name, args)).model;
   };
-  const mm = (n: number) => `${Math.ceil(n)} mm`;
-  const lobby = () => m.rooms.find((r) => r.id === lobbyId)!;
-  const roomNamed = (name: string) => m.rooms.find((r) => r.name === name)?.id;
-  const wallBetween = (a: string, b: string) => {
-    const ra = m.rooms.find((r) => r.id === a)!;
-    const rb = m.rooms.find((r) => r.id === b)!;
-    const pairs = [['top', 'bottom'], ['bottom', 'top'], ['left', 'right'], ['right', 'left']] as const;
-    const hit = pairs.find(([x, y]) => ra.bounds[x] === rb.bounds[y]);
-    if (!hit) throw new Error(`${ra.name} and ${rb.name} don't share a wall`);
-    return ra.bounds[hit[0]];
-  };
-  const sides = ['top', 'bottom', 'left', 'right'] as const;
-  type Side = (typeof sides)[number];
-  const opposite: Record<Side, Side> = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
-  const compass = (s: Side) => planSideCompass(s, m.northAngle);
-  const clear = () => roomClearRect(m, lobby());
-  const along = (s: Side) => {
-    const r = clear();
-    return s === 'top' || s === 'bottom' ? r.x1 - r.x0 : r.y1 - r.y0;
-  };
-
-  const door = m.openings.find((o) => o.id === mainDoorId);
-  const doorSide = sides.find((s) => door && lobby().bounds[s] === door.wallId) ?? 'left';
-  const T = 115;
-  const stair = sizeStair('dog-legged', 1067, DEFAULT_FLOOR_HEIGHT);
-  const shaft = LIFT_SHAFTS[6]!;
-
-  // 1. Stair along a side next to the door wall, outer wall preferred.
-  const perp = sides.filter((s) => s !== doorSide && s !== opposite[doorSide]);
-  const ext = (s: Side) => m.walls.find((w) => w.id === lobby().bounds[s])?.kind === 'external';
-  const stairSide = [...perp].sort((a, b) => Number(ext(b)) - Number(ext(a)))[0]!;
-  const long = Math.max(stair.width, stair.length);
-  const short = Math.min(stair.width, stair.length);
-  const depth = along(stairSide) >= long ? short : long;
-  op('split_room', { roomId: lobbyId, side: compass(stairSide), size: mm(depth), name: 'Stair', kind: 'stair' });
-  const stairRoom = roomNamed('Stair')!;
-
-  // 2. Lift shaft. If the stair room is longer than the stair, the spare end
-  //    (away from the main door) becomes the lift; otherwise a lift column is
-  //    taken off the lobby across from the main door, any spare as a duct/store.
-  const liftDepth = Math.min(shaft.w, shaft.d);
-  const liftLong = Math.max(shaft.w, shaft.d);
-  const sr = roomClearRect(m, m.rooms.find((r) => r.id === stairRoom)!);
-  const stairRunAlong = stairSide === 'top' || stairSide === 'bottom' ? sr.x1 - sr.x0 : sr.y1 - sr.y0;
-  const stairUses = depth === short ? long : short;
-  const spare = stairRunAlong - stairUses - T;
-  const liftInStairRoom = spare >= liftDepth && depth >= liftDepth;
-  if (liftInStairRoom) {
-    op('split_room', { roomId: stairRoom, side: compass(opposite[doorSide]), size: mm(spare), name: 'Lift', kind: 'lift' });
-  } else {
-    op('split_room', { roomId: lobbyId, side: compass(opposite[doorSide]), size: mm(liftLong), name: 'Lift', kind: 'lift' });
-    const column = roomNamed('Lift')!;
-    const columnLength = along(opposite[doorSide]);
-    if (columnLength - liftDepth - T >= 900) {
-      op('split_room', { roomId: column, side: compass(opposite[stairSide]), size: mm(columnLength - liftDepth - T), name: 'Duct / Store', kind: 'other' });
-    }
-  }
-  const liftRoom = roomNamed('Lift')!;
-  op('add_lift', { roomId: liftRoom, persons: '6' });
-  op('add_stair', { roomId: stairRoom, type: 'dog-legged' });
-  // The stair sits at the main-door end of its room.
-  const stairCore = (m.cores ?? []).find((c) => c.kind === 'stair')!;
-  const cornerOf = (a: Side, b2: Side) => [compass(a), compass(b2)].sort((x, y) => (['north', 'south'].includes(x) ? -1 : 1) - (['north', 'south'].includes(y) ? -1 : 1)).join('-');
-  op('place_core', { coreId: stairCore.id, corner: cornerOf(stairSide, doorSide) });
-
-  // 3. Ways in off the lobby.
-  op('add_opening', { wallId: wallBetween(lobbyId, stairRoom), kind: 'opening', width: '3\'6"', label: 'Stair entry', roomId: liftInStairRoom ? stairRoom : lobbyId });
-  op('add_opening', { wallId: wallBetween(lobbyId, liftRoom), kind: 'sliding', width: '3\'', label: 'Lift door', roomId: liftRoom });
-  const store = roomNamed('Duct / Store');
-  if (store) op('add_opening', { wallId: wallBetween(lobbyId, store), kind: 'door', width: '2\'6"', label: 'Store door', roomId: store });
-  if (door) op('centre_opening', { openingId: door.id, roomId: lobbyId });
-  return m;
+  op('rename_room', { roomId: 'r-lobby', name: 'Lobby' });
+  op('add_stair', { roomId: 'r-lobby', type: 'dog-legged', corner: 'south-east' });
+  op('add_lift', { roomId: 'r-lobby', persons: '6', corner: 'north-east' });
+  return { ...m, revision: 1 };
 }
 
 export const TEMPLATES: Template[] = [
   {
     id: '3bhk',
     name: '3BHK flat',
-    description: '3 bedrooms, 2 toilets, kitchen, living/dining; separate lobby, stair and lift.',
-    build: () => carveCoreUnits(threeBhkBase(), 'r-lobby'),
-    base: threeBhkBase,
-    finish: (m) => carveCoreUnits(m, 'r-lobby'),
+    description: '3 bedrooms, 2 toilets, kitchen, living/dining, lobby with stair and lift.',
+    build: threeBhk,
   },
   { id: '2bhk', name: '2BHK flat', description: '2 bedrooms, 2 toilets, kitchen, living/dining.', build: twoBhk },
   { id: '1bhk', name: '1BHK flat', description: '1 bedroom, toilet, wash, kitchen, living/dining.', build: oneBhk },

@@ -37,6 +37,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
   const [error, setError] = useState('');
   const [bedrooms, setBedrooms] = useState(0); // 0 = decide from the plinth
   const [toilets, setToilets] = useState(0); // 0 = as the layout comes
+  const [core, setCore] = useState<'' | 'both' | 'stair' | 'none'>(''); // '' = as the layout comes
 
   function len(label: string, v: string, allowEmpty = false): string | null {
     const t = v.trim();
@@ -71,7 +72,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
       return siteOps;
   }
 
-  const counts = () => ({ ...(template === 'auto' && bedrooms ? { bedrooms } : {}), ...(toilets ? { toilets } : {}) });
+  const counts = () => ({ ...(template === 'auto' && bedrooms ? { bedrooms } : {}), ...(toilets ? { toilets } : {}), ...(core ? { core } : {}) });
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -104,14 +105,16 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
         const beds = r.model.rooms.filter((x) => x.kind === 'bedroom').length;
         const wcs = r.model.rooms.filter((x) => x.kind === 'toilet').length;
         const layout = r.notes[0]?.replace(/^Started from /, '').replace(/, chosen for .*$/, '') ?? '';
-        return { text: `${head} → ${layout}: ${beds} bedroom${beds === 1 ? '' : 's'}, ${wcs} toilet${wcs === 1 ? '' : 's'}`, bad: false };
+        const kinds = (r.model.cores ?? []).map((c) => c.kind);
+        const coreText = kinds.includes('lift') ? ', stair + lift' : kinds.includes('stair') ? ', stair' : '';
+        return { text: `${head} → ${layout}: ${beds} bedroom${beds === 1 ? '' : 's'}, ${wcs} toilet${wcs === 1 ? '' : 's'}${coreText}`, bad: false };
       } catch (err) {
         return { text: `${head}. ${err instanceof Error ? err.message : ''}`, bad: true };
       }
     } catch {
       return null;
     }
-  }, [withPlot, ew, ns, setbacks, access, trees, template, bedrooms, toilets]);
+  }, [withPlot, ew, ns, setbacks, access, trees, template, bedrooms, toilets, core]);
 
   const tplSize = (id: string) => {
     const r = buildingOuterRect(models[id]!);
@@ -174,7 +177,17 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
             ))}
           </div>
         </div>
-        <p className="nd-hint">Extra toilets are attached to bedrooms (largest first), then a common toilet off the living area. Fewer turns the common toilet into a store.</p>
+        <div>
+          <div className="nd-label">Stair &amp; lift</div>
+          <div className="chips" role="radiogroup" aria-label="Stair and lift">
+            {([['', 'Standard'], ['both', 'Stair + lift'], ['stair', 'Stair only'], ['none', 'None']] as const).map(([v, label]) => (
+              <button type="button" key={label} role="radio" aria-checked={core === v} className={`chip ${core === v ? 'on' : ''}`} onClick={() => setCore(v)}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="nd-hint">The stair and lift are walled units you can drag anywhere afterwards. Extra toilets are attached to bedrooms (largest first), then a common toilet off the living area. Fewer turns the common toilet into a store.</p>
       </div>
 
       <label className="nd-check">

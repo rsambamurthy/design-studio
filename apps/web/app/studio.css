@@ -298,3 +298,7 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .chip.on { background: var(--theme-primary); border-color: var(--theme-primary); color: #fff; }
 .chip:disabled { cursor: default; opacity: .55; }
 .chip:disabled.on { opacity: 1; }
+
+.plan-svg .core-wall { fill: var(--color-text); }
+.plan-svg .core.hot .core-wall { fill: var(--theme-accent); }
+.plan-svg.editable g.drag:hover .core-wall { fill: var(--theme-primary); }

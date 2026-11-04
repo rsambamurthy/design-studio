@@ -70,6 +70,8 @@ export interface NewDesignInput {
   bedrooms?: unknown;
   /** Total toilets wanted. */
   toilets?: unknown;
+  /** Stair and lift: both, stair, none. */
+  core?: unknown;
 }
 
 export async function createDesign(userId: string, input: NewDesignInput): Promise<string> {
@@ -92,7 +94,7 @@ export async function createDesign(userId: string, input: NewDesignInput): Promi
       const n = Number(v);
       return Number.isInteger(n) && n >= 1 && n <= max ? n : undefined;
     };
-    ({ model, ops, notes } = startDesign(templateId, siteOps, name, { bedrooms: count(input.bedrooms, 3), toilets: count(input.toilets, 4) }));
+    ({ model, ops, notes } = startDesign(templateId, siteOps, name, { bedrooms: count(input.bedrooms, 3), toilets: count(input.toilets, 4), core: ['both', 'stair', 'none'].includes(String(input.core)) ? (input.core as 'both' | 'stair' | 'none') : undefined }));
   } catch (err) {
     throw new AuthError(err instanceof Error ? err.message : String(err));
   }

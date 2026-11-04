@@ -94,16 +94,17 @@ export const OperationSchemas = {
       flightWidth: distance.optional().describe('Clear width of each flight (default 3\'6")'),
       floorHeight: distance.optional().describe('Floor-to-floor height (default 10\')'),
       corner: z.enum(['north-west', 'north-east', 'south-west', 'south-east']).optional(),
+      enclosed: z.boolean().default(true).describe('Give it its own walls (default); false for an open stair'),
     })
-    .describe('Add a staircase in a room, in a corner (first corner where it fits if not given).'),
+    .describe('Add a staircase as its own walled unit, in a corner of a room (first corner where it fits if not given). It can be moved anywhere afterwards.'),
   add_lift: z
     .object({
       roomId: id('room to put the lift in'),
       persons: z.enum(['4', '6', '8']).default('6').describe('Lift capacity'),
       corner: z.enum(['north-west', 'north-east', 'south-west', 'south-east']).optional(),
     })
-    .describe('Add a lift shaft in a room, in a corner.'),
-  move_core: z.object({ coreId: id('stair or lift'), direction: compass, distance }).describe('Move a stair or lift.'),
+    .describe('Add a lift as its own walled shaft with a door, in a corner of a room. It can be moved anywhere afterwards.'),
+  move_core: z.object({ coreId: id('stair or lift'), direction: compass, distance }).describe('Move a stair or lift (with its walls), within its room or into another room. Snaps flush to a wall when close.'),
   place_core: z
     .object({ coreId: id('stair or lift'), roomId: id('room').optional(), corner: z.enum(['north-west', 'north-east', 'south-west', 'south-east']) })
     .describe('Put a stair or lift into a corner of its room, or of another room.'),

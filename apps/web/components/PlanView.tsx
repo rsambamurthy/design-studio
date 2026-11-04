@@ -9,6 +9,7 @@
 import { useMemo, useState, type PointerEvent } from 'react';
 import {
   coreFootprint,
+  enclosureOf,
   formatFtIn,
   formatLength,
   getCatalogueItem,
@@ -176,7 +177,7 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds }: Props & { bo
             startDrag(e, c.id, free, (v) => freeMoves(v, `the ${c.label.toLowerCase()}`, (direction, distance) => ({ op: 'move_core', args: { coreId: c.id, direction, distance } })))
           }
         >
-          <CoreShape c={c} hot={changedIds.has(c.id) || preview?.id === c.id} />
+          <CoreShape model={model} c={c} hot={changedIds.has(c.id) || preview?.id === c.id} />
         </g>
       ))}
 
@@ -248,7 +249,7 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds }: Props & { bo
 }
 
 /** Staircase (treads, landing, up-arrow) or lift shaft (crossed box), in the core's local frame. */
-function CoreShape({ c, hot }: { c: CoreElement; hot: boolean }) {
+function CoreShape({ model, c, hot }: { model: BuildingModel; c: CoreElement; hot: boolean }) {
   const W = c.width;
   const L = c.length;
   const x0 = -W / 2;
@@ -282,12 +283,16 @@ function CoreShape({ c, hot }: { c: CoreElement; hot: boolean }) {
       </>
     );
   }
-  const fp = coreFootprint(c);
+  const enc = enclosureOf(model, c);
+  const fp = enc.outer;
   return (
     <g className={`core ${hot ? 'hot' : ''}`}>
-      <title>{c.stair ? `${c.label}: ${c.stair.type}, ${c.stair.risers} risers` : c.label}</title>
+      <title>{`${c.stair ? `${c.label}: ${c.stair.type}, ${c.stair.risers} risers` : c.label} · drag to move`}</title>
       <rect x={fp.x0} y={fp.y0} width={fp.x1 - fp.x0} height={fp.y1 - fp.y0} className="core-hit" />
       <g transform={`translate(${c.at.x} ${c.at.y}) rotate(${c.rotation})`}>{body}</g>
+      {enc.walls.map((w, k) => (
+        <rect key={k} x={w.x0} y={w.y0} width={w.x1 - w.x0} height={w.y1 - w.y0} className="core-wall" />
+      ))}
     </g>
   );
 }
