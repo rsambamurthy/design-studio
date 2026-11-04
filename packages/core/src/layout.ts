@@ -44,6 +44,10 @@ export function rotateLayout(input: BuildingModel): BuildingModel {
     f.at = rot(f.at);
     f.rotation = (f.rotation + 90) % 360;
   }
+  for (const c of m.cores ?? []) {
+    c.at = rot(c.at);
+    c.rotation = (c.rotation + 90) % 360;
+  }
   return m;
 }
 

@@ -49,8 +49,39 @@ export const OperationSchemas = {
     .describe('Centre a furniture item in its room along an axis.'),
   rotate_item: z.object({ itemId: id('furniture item'), degrees: z.enum(['90', '-90', '180']) }).describe('Rotate an item clockwise.'),
   flip_item: z.object({ itemId: id('furniture item') }).describe('Swap the hand of a handed item (e.g. chaise left <-> right).'),
-  remove: z.object({ entityId: id('opening or furniture item') }).describe('Remove a door, window or furniture item.'),
+  remove: z.object({ entityId: id('opening, furniture item, stair or lift') }).describe('Remove a door, window, furniture item, stair or lift.'),
   rename_room: z.object({ roomId: id('room'), name: z.string().min(1) }).describe('Rename a room.'),
+
+  // ---------- Rooms: swap use / move to a corner ----------
+  swap_rooms: z
+    .object({ roomA: id('first room'), roomB: id('second room') })
+    .describe('Swap what two rooms are used for (e.g. kitchen and Bed 2). Names, room types, furniture, stair and lift move with the use; walls and doors stay.'),
+  move_room_to: z
+    .object({ roomId: id('room'), corner: z.enum(['north-west', 'north-east', 'south-west', 'south-east']) })
+    .describe('Move a room\'s use to the room in a corner of the building, by swapping with whatever room is there.'),
+
+  // ---------- Stair and lift ----------
+  add_stair: z
+    .object({
+      roomId: id('room to put the stair in'),
+      type: z.enum(['dog-legged', 'straight']).default('dog-legged'),
+      flightWidth: distance.optional().describe('Clear width of each flight (default 3\'6")'),
+      floorHeight: distance.optional().describe('Floor-to-floor height (default 10\')'),
+      corner: z.enum(['north-west', 'north-east', 'south-west', 'south-east']).optional(),
+    })
+    .describe('Add a staircase in a room, in a corner (first corner where it fits if not given).'),
+  add_lift: z
+    .object({
+      roomId: id('room to put the lift in'),
+      persons: z.enum(['4', '6', '8']).default('6').describe('Lift capacity'),
+      corner: z.enum(['north-west', 'north-east', 'south-west', 'south-east']).optional(),
+    })
+    .describe('Add a lift shaft in a room, in a corner.'),
+  move_core: z.object({ coreId: id('stair or lift'), direction: compass, distance }).describe('Move a stair or lift.'),
+  place_core: z
+    .object({ coreId: id('stair or lift'), roomId: id('room').optional(), corner: z.enum(['north-west', 'north-east', 'south-west', 'south-east']) })
+    .describe('Put a stair or lift into a corner of its room, or of another room.'),
+  rotate_core: z.object({ coreId: id('stair or lift'), degrees: z.enum(['90', '-90', '180']) }).describe('Turn a stair or lift.'),
 
   // ---------- Site: plot, setbacks, access, trees, building placement ----------
   set_plot: z

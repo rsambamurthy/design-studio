@@ -7,6 +7,7 @@ import { getCatalogueItem, itemFootprint } from './catalogue';
 import { rectSize, rectsOverlap, roomClearRect, wallDir, pointOnWall, type Rect } from './geometry';
 import { getWall, type BuildingModel, type FurnitureItem, type Opening, type PlanSide, type Point } from './model';
 import { PLAN_SIDES, boundaryGaps, circleHitsRect, footprintOnPlot, sideToCompass } from './site';
+import { MAX_RISER, coreFootprint, coresOf } from './cores';
 import { formatLength } from './units';
 
 export type Severity = 'error' | 'warning' | 'advisory';
@@ -90,8 +91,66 @@ export function runChecks(model: BuildingModel): Issue[] {
     }
   }
 
+  issues.push(...coreChecks(model, swings));
+  issues.push(...plumbingChecks(model));
   issues.push(...siteChecks(model));
   return issues;
+}
+
+/** Stairs and lifts: inside their room, not overlapping, clear of door swings, sensible risers. */
+function coreChecks(model: BuildingModel, swings: { o: Opening; rect: Rect }[]): Issue[] {
+  const out: Issue[] = [];
+  const u = model.displayUnits;
+  const cores = coresOf(model);
+  for (const c of cores) {
+    const fp = coreFootprint(c);
+    const room = model.rooms.find((r) => r.id === c.roomId);
+    if (room) {
+      const rr = roomClearRect(model, room);
+      if (fp.x0 < rr.x0 - OVERLAP_TOL || fp.x1 > rr.x1 + OVERLAP_TOL || fp.y0 < rr.y0 - OVERLAP_TOL || fp.y1 > rr.y1 + OVERLAP_TOL) {
+        out.push({ code: 'core.outside-room', severity: 'error', message: `The ${c.label.toLowerCase()} doesn't fit inside ${room.name}.`, entityIds: [c.id, room.id], at: c.at });
+      }
+    }
+    for (const d of cores) {
+      if (d.id <= c.id) continue;
+      if (rectsOverlap(fp, coreFootprint(d), OVERLAP_TOL)) {
+        out.push({ code: 'core.overlap', severity: 'error', message: `The ${c.label.toLowerCase()} overlaps the ${d.label.toLowerCase()}.`, entityIds: [c.id, d.id], at: c.at });
+      }
+    }
+    for (const f of model.furniture) {
+      if (rectsOverlap(fp, itemFootprint(f), OVERLAP_TOL)) {
+        out.push({ code: 'core.furniture', severity: 'error', message: `${f.label} overlaps the ${c.label.toLowerCase()}.`, entityIds: [c.id, f.id], at: f.at });
+      }
+    }
+    for (const { o, rect } of swings) {
+      if (rectsOverlap(fp, rect, OVERLAP_TOL)) {
+        out.push({ code: 'core.door-swing', severity: 'warning', message: `${o.label} swing hits the ${c.label.toLowerCase()}.`, entityIds: [o.id, c.id], at: c.at });
+      }
+    }
+    if (c.stair && c.stair.riser > MAX_RISER) {
+      out.push({ code: 'stair.riser', severity: 'warning', message: `Stair risers are ${formatLength(c.stair.riser, u)}; typically at most ${formatLength(MAX_RISER, u)}.`, entityIds: [c.id], at: c.at });
+    }
+  }
+  return out;
+}
+
+/** Wet rooms (toilet, kitchen, service) should touch at least one plumbing or external wall. */
+function plumbingChecks(model: BuildingModel): Issue[] {
+  const out: Issue[] = [];
+  for (const r of model.rooms) {
+    if (!r.wet) continue;
+    const walls = Object.values(r.bounds).map((id) => model.walls.find((w) => w.id === id));
+    if (walls.some((w) => w && (w.kind === 'plumbing' || w.kind === 'external'))) continue;
+    const c = roomClearRect(model, r);
+    out.push({
+      code: 'room.no-plumbing-wall',
+      severity: 'advisory',
+      message: `${r.name} has no plumbing or outer wall for pipes and drains; check the routing.`,
+      entityIds: [r.id],
+      at: { x: (c.x0 + c.x1) / 2, y: (c.y0 + c.y1) / 2 },
+    });
+  }
+  return out;
 }
 
 /** Setbacks, plot fit, tree protection and passage width. */

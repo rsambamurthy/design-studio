@@ -102,6 +102,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const [labelEdit, setLabelEdit] = useState<{ n: number; text: string } | null>(null);
   const [notice, setNotice] = useState('');
   const [planMode, setPlanMode] = useState<'plan' | 'site'>('plan');
+  const [editStatus, setEditStatus] = useState<{ text: string; error: boolean } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   const model = viewing?.model ?? design.model;
@@ -134,7 +135,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   }
 
   /** Direct edits (site form): same typed operations, saved as one revision. */
-  async function applyOps(request: string, ops: OpInput[]): Promise<ApplyResult> {
+  async function applyOps(request: string, ops: OpInput[], showSite = true): Promise<ApplyResult> {
     if (busy) return { error: 'Please wait for the current change to finish.' };
     setBusy(true);
     try {
@@ -146,16 +147,22 @@ export default function Studio({ email, initial }: { email: string; initial: Des
       setChanged(new Set(r.changedIds));
       setRedo([]);
       setViewing(null);
-      setPlanMode('site');
+      if (showSite) setPlanMode('site');
+      setEditStatus({ text: `${r.summaries.join(' ')}${r.revision ? ` · saved as Rev ${revisionLetter(r.revision)}` : ''}`, error: false });
       say({ role: 'user', text: request });
       say({ role: 'ai', text: r.summaries.join(' '), assumptions: r.assumptions, newIssues: r.newIssues, saved: r.revision });
       return { summary: r.summaries.join(' '), assumptions: r.assumptions, newIssues: r.newIssues, revision: r.revision };
     } catch (e) {
-      return { error: e instanceof Error ? e.message : 'Could not save that change.' };
+      const msg = e instanceof Error ? e.message : 'Could not save that change.';
+      setEditStatus({ text: msg, error: true });
+      return { error: msg };
     } finally {
       setBusy(false);
     }
   }
+
+  /** Drag edits on the plan or site: saved like any other change; disabled while viewing old revisions. */
+  const dragEdit = viewing || busy ? undefined : (request: string, ops: OpInput[]) => void applyOps(request, ops, false);
 
   function applyDesign(next: DesignDetail) {
     setChanged(new Set(diffModels(design.model, next.model).changed));
@@ -170,6 +177,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     if (/^(undo|undo that|go back)$/i.test(message)) return void undo(message);
     if (/^redo$/i.test(message)) return void redoLast(message);
     say({ role: 'user', text: message });
+    setEditStatus(null);
     setBusy(true);
     try {
       const r = await api<{ turn: Turn; revision: number | null; design: DesignDetail }>(`/api/designs/${design.id}/chat`, {
@@ -200,6 +208,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   }
 
   async function restore(target: number, kind: 'undo' | 'redo' | 'restore') {
+    setEditStatus(null);
     const r = await api<{ revision: number | null; design: DesignDetail }>(`/api/designs/${design.id}/restore`, {
       method: 'POST',
       json: { revision: target, kind, baseRev: design.currentRev },
@@ -491,10 +500,13 @@ export default function Studio({ email, initial }: { email: string; initial: Des
           </div>
           {viewing && <p className="viewing-banner">Viewing Rev {revisionLetter(viewing.number)} (read-only)</p>}
           {planMode === 'site' ? (
-            <SitePlanView model={model} issues={issues} hot={changed.has('site')} />
+            <SitePlanView model={model} issues={issues} hot={changed.has('site')} onEdit={dragEdit} />
           ) : (
-            <PlanView model={model} changedIds={changed} issues={issues} />
+            <PlanView model={model} changedIds={changed} issues={issues} onEdit={dragEdit} />
           )}
+          <p className={`edit-status ${editStatus?.error ? 'err' : ''}`} role="status">
+            {editStatus ? editStatus.text : viewing ? 'Viewing an old revision: go back to current to edit.' : 'Tip: drag walls, doors, windows, furniture, stairs and lifts to move them (snaps to 1").'}
+          </p>
           <div className="checks">
             <span className={`badge ${counts.error ? 'badge-red' : 'badge-green'}`}>{plural(counts.error, 'error')}</span>
             <span className={`badge ${counts.warning ? 'badge-yellow' : 'badge-green'}`}>{plural(counts.warning, 'warning')}</span>

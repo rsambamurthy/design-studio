@@ -76,6 +76,19 @@ function planOps(model: BuildingModel, s: string): Operation[] {
     return [parseOperation(name, { [idKey]: target.id, direction, distance: distance.trim() })];
   }
 
+  if ((m = s.match(/^swap\s+(?:the\s+)?(.+?)\s+(?:and|with)\s+(?:the\s+)?(.+)$/))) {
+    const a = findEntities(model, m[1]!).find((e) => e.type === 'room');
+    const b = findEntities(model, m[2]!).find((e) => e.type === 'room');
+    if (!a || !b) throw new Error('Name two rooms to swap, e.g. "swap the kitchen and Bed 2".');
+    return [parseOperation('swap_rooms', { roomA: a.id, roomB: b.id })];
+  }
+
+  if ((m = s.match(/^move\s+(?:the\s+)?(.+?)\s+to\s+the\s+(north-west|north-east|south-west|south-east)\s+corner$/))) {
+    const r = findEntities(model, m[1]!).find((e) => e.type === 'room');
+    if (!r) throw new Error(`Which room is "${m[1]}"?`);
+    return [parseOperation('move_room_to', { roomId: r.id, corner: m[2] })];
+  }
+
   if ((m = s.match(/^centre\s+(.+)$/))) {
     const target = resolve(model, m[1]!);
     if (target.type === 'opening') return [parseOperation('centre_opening', { openingId: target.id })];

@@ -83,6 +83,24 @@ export interface FurnitureItem {
 
 export type PlanSide = 'top' | 'bottom' | 'left' | 'right';
 
+/**
+ * A staircase or lift: a fixed element with its own footprint, placed in a room.
+ * Local frame like furniture: `width` along local x, `length` along local y,
+ * rotated clockwise by `rotation` (multiples of 90°) about `at`.
+ */
+export interface CoreElement {
+  id: string;
+  kind: 'stair' | 'lift';
+  label: string;
+  roomId: string;
+  at: Point;
+  rotation: number;
+  width: Mm;
+  length: Mm;
+  stair?: { type: 'dog-legged' | 'straight'; flightWidth: Mm; floorHeight: Mm; risers: number; riser: Mm; tread: Mm };
+  lift?: { persons: number };
+}
+
 export interface Tree {
   id: string;
   label: string;
@@ -134,6 +152,8 @@ export interface BuildingModel {
   openings: Opening[];
   rooms: Room[];
   furniture: FurnitureItem[];
+  /** Stairs and lifts. Optional: older designs have none. */
+  cores?: CoreElement[];
   revision: number;
 }
 
@@ -141,7 +161,8 @@ export type Entity =
   | ({ type: 'wall' } & Wall)
   | ({ type: 'opening' } & Opening)
   | ({ type: 'room' } & Room)
-  | ({ type: 'furniture' } & FurnitureItem);
+  | ({ type: 'furniture' } & FurnitureItem)
+  | ({ type: 'core' } & CoreElement);
 
 export function findEntity(model: BuildingModel, id: string): Entity | undefined {
   const w = model.walls.find((e) => e.id === id);
@@ -152,6 +173,8 @@ export function findEntity(model: BuildingModel, id: string): Entity | undefined
   if (r) return { type: 'room', ...r };
   const f = model.furniture.find((e) => e.id === id);
   if (f) return { type: 'furniture', ...f };
+  const c = (model.cores ?? []).find((e) => e.id === id);
+  if (c) return { type: 'core', ...c };
   return undefined;
 }
 

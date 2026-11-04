@@ -10,6 +10,7 @@ import {
   pointOnWall,
   planSideCompass,
   rectSize,
+  rectsOverlap,
   roomClearRect,
   vectorToCompass,
   wallDir,
@@ -26,6 +27,7 @@ import {
   type FurnitureItem,
   type Opening,
   type Point,
+  type CoreElement,
   type Room,
   type Site,
   type Wall,
@@ -41,6 +43,7 @@ import {
   type TreePosition,
 } from './site';
 import type { Operation } from './ops';
+import { CORNERS, DEFAULT_FLOOR_HEIGHT, LIFT_SHAFTS, coreFootprint, coresOf, placeInCorner, sizeStair, type Corner } from './cores';
 import { formatLength, parseLength } from './units';
 
 export interface OpResult {
@@ -235,8 +238,11 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       } else if (e.type === 'furniture') {
         model.furniture = model.furniture.filter((f) => f.id !== e.id);
         ctx.touch(e.id, e.roomId);
+      } else if (e.type === 'core') {
+        model.cores = coresOf(model).filter((c) => c.id !== e.id);
+        ctx.touch(e.id, e.roomId);
       } else {
-        throw new ModelError('Only doors, windows and furniture can be removed in this version.');
+        throw new ModelError('Only doors, windows, furniture, stairs and lifts can be removed in this version.');
       }
       ctx.summary = `Removed ${e.label}.`;
       break;
@@ -423,6 +429,103 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       break;
     }
 
+    case 'swap_rooms': {
+      const a = getRoom(model, args.roomA);
+      const b = getRoom(model, args.roomB);
+      if (a.id === b.id) throw new ModelError('Pick two different rooms to swap.');
+      swapRooms(model, a, b, ctx);
+      ctx.summary = `Swapped ${b.name} and ${a.name}: ${a.name} is now where ${b.name} was.`;
+      break;
+    }
+
+    case 'move_room_to': {
+      const room = getRoom(model, args.roomId);
+      const target = roomAtCorner(model, args.corner as Corner);
+      if (!target) throw new ModelError(`No single room fills the ${args.corner} corner of the building.`);
+      if (target.id === room.id) throw new ModelError(`${room.name} is already in the ${args.corner} corner.`);
+      const was = target.name;
+      swapRooms(model, room, target, ctx);
+      ctx.summary = `Moved ${target.name} to the ${args.corner} corner; ${was} takes its old place.`;
+      break;
+    }
+
+    case 'add_stair': {
+      const room = getRoom(model, args.roomId);
+      const flightWidth = args.flightWidth ? ctx.length(args.flightWidth) : 1067;
+      const floorHeight = args.floorHeight ? ctx.length(args.floorHeight) : DEFAULT_FLOOR_HEIGHT;
+      const type = args.type ?? 'dog-legged';
+      const dims = sizeStair(type, flightWidth, floorHeight);
+      const core: CoreElement = {
+        id: ctx.newId('stair'),
+        kind: 'stair',
+        label: 'Staircase',
+        roomId: room.id,
+        at: { x: 0, y: 0 },
+        rotation: 0,
+        width: dims.width,
+        length: dims.length,
+        stair: { type, flightWidth, floorHeight, risers: dims.risers, riser: dims.riser, tread: dims.tread },
+      };
+      ctx.placeCore(core, room, args.corner as Corner | undefined);
+      model.cores = [...coresOf(model), core];
+      ctx.touch(core.id, room.id);
+      const u = model.displayUnits;
+      ctx.summary = `Added a ${type} staircase in ${room.name}: ${dims.risers} risers of ${formatLength(dims.riser, u)}, flights ${formatLength(flightWidth, u)} wide.`;
+      ctx.note(`Footprint ${formatLength(core.width, u)} × ${formatLength(core.length, u)} for a ${formatLength(floorHeight, u)} floor-to-floor height${args.floorHeight ? '' : ' (default)'}; treads ${formatLength(dims.tread, u)}.`);
+      break;
+    }
+
+    case 'add_lift': {
+      const room = getRoom(model, args.roomId);
+      const persons = Number(args.persons ?? '6');
+      const shaft = LIFT_SHAFTS[persons]!;
+      const core: CoreElement = {
+        id: ctx.newId('lift'),
+        kind: 'lift',
+        label: `Lift (${persons} person)`,
+        roomId: room.id,
+        at: { x: 0, y: 0 },
+        rotation: 0,
+        width: shaft.w,
+        length: shaft.d,
+        lift: { persons },
+      };
+      ctx.placeCore(core, room, args.corner as Corner | undefined);
+      model.cores = [...coresOf(model), core];
+      ctx.touch(core.id, room.id);
+      const u = model.displayUnits;
+      ctx.summary = `Added a ${persons}-person lift in ${room.name}.`;
+      ctx.note(`Shaft ${formatLength(shaft.w, u)} × ${formatLength(shaft.d, u)} (typical; confirm with the lift supplier).`);
+      break;
+    }
+
+    case 'move_core': {
+      const c = ctx.core(args.coreId);
+      const d = ctx.length(args.distance);
+      const v = compassVector(args.direction, model.northAngle);
+      c.at = { x: Math.round(c.at.x + v.x * d), y: Math.round(c.at.y + v.y * d) };
+      ctx.touch(c.id);
+      ctx.summary = `Moved the ${c.label.toLowerCase()} ${formatLength(d, model.displayUnits)} ${args.direction}.`;
+      break;
+    }
+
+    case 'place_core': {
+      const c = ctx.core(args.coreId);
+      const room = getRoom(model, args.roomId ?? c.roomId);
+      placeInCorner(model, c, room, args.corner as Corner);
+      ctx.touch(c.id, room.id);
+      ctx.summary = `Put the ${c.label.toLowerCase()} in the ${args.corner} corner of ${room.name}.`;
+      break;
+    }
+
+    case 'rotate_core': {
+      const c = ctx.core(args.coreId);
+      c.rotation = (((c.rotation + Number(args.degrees)) % 360) + 360) % 360;
+      ctx.touch(c.id);
+      ctx.summary = `Turned the ${c.label.toLowerCase()} ${args.degrees}°.`;
+      break;
+    }
+
     case 'rename_room': {
       const room = getRoom(model, args.roomId);
       const before = room.name;
@@ -470,6 +573,7 @@ class Ctx {
       ...this.model.rooms.map((e) => e.id),
       ...this.model.furniture.map((e) => e.id),
       ...(this.model.site?.trees ?? []).map((e) => e.id),
+      ...coresOf(this.model).map((e) => e.id),
     ]);
     let n = 1;
     while (used.has(`${prefix}-${n}`)) n++;
@@ -480,6 +584,28 @@ class Ctx {
     const o = this.model.openings.find((e) => e.id === id);
     if (!o) throw new ModelError(`No door or window with id "${id}"`);
     return o;
+  }
+
+  core(id: string): CoreElement {
+    const c = coresOf(this.model).find((e) => e.id === id);
+    if (!c) throw new ModelError(`No stair or lift with id "${id}"`);
+    return c;
+  }
+
+  /** Put a new core in the given corner, or the first corner where it fits. */
+  placeCore(c: CoreElement, room: Room, corner?: Corner) {
+    if (corner) return placeInCorner(this.model, c, room, corner);
+    let last: unknown;
+    for (const k of CORNERS) {
+      try {
+        placeInCorner(this.model, c, room, k);
+        const others = coresOf(this.model).filter((o) => o.roomId === room.id);
+        if (others.every((o) => !rectsOverlap(coreFootprint(o), coreFootprint(c), 5))) return;
+      } catch (err) {
+        last = err;
+      }
+    }
+    throw last instanceof Error ? last : new ModelError(`There's no free corner in ${room.name} for the ${c.label.toLowerCase()}.`);
   }
 
   item(id: string): FurnitureItem {
@@ -645,6 +771,38 @@ function fitBuilding(model: BuildingModel, outerW: number, outerH: number, ctx: 
     f.at = { x: Math.round(x), y: Math.round(y) };
   }
 
+  // Stairs and lifts keep their distance to the nearer walls too (never dropped).
+  for (const c of coresOf(model)) {
+    const before = roomBefore.get(c.roomId);
+    const room = model.rooms.find((r) => r.id === c.roomId);
+    if (!before || !room) {
+      c.at = { x: X(c.at.x), y: Y(c.at.y) };
+      continue;
+    }
+    const after = roomClearRect(model, room);
+    const fr = coreFootprint(c);
+    const w = fr.x1 - fr.x0;
+    const h = fr.y1 - fr.y0;
+    const x = fr.x0 - before.x0 <= before.x1 - fr.x1 ? after.x0 + (fr.x0 - before.x0) + w / 2 : after.x1 - (before.x1 - fr.x1) - w / 2;
+    const y = fr.y0 - before.y0 <= before.y1 - fr.y1 ? after.y0 + (fr.y0 - before.y0) + h / 2 : after.y1 - (before.y1 - fr.y1) - h / 2;
+    c.at = { x: Math.round(x), y: Math.round(y) };
+    const nf = coreFootprint(c);
+    if (nf.x1 - nf.x0 > after.x1 - after.x0 + 1 || nf.y1 - nf.y0 > after.y1 - after.y0 + 1) {
+      c.rotation = (c.rotation + 90) % 360;
+      const rf = coreFootprint(c);
+      if (rf.x1 - rf.x0 > after.x1 - after.x0 + 1 || rf.y1 - rf.y0 > after.y1 - after.y0 + 1) {
+        c.rotation = (c.rotation + 270) % 360;
+        ctx.note(`The ${c.label.toLowerCase()} no longer fits ${room.name}; it needs a bigger room.`);
+      } else ctx.note(`The ${c.label.toLowerCase()} was turned to fit the resized ${room.name}.`);
+    }
+    // keep inside the room where possible
+    const f2 = coreFootprint(c);
+    const hw = (f2.x1 - f2.x0) / 2;
+    const hh = (f2.y1 - f2.y0) / 2;
+    if (hw * 2 <= after.x1 - after.x0) c.at = { ...c.at, x: Math.round(Math.min(Math.max(c.at.x, after.x0 + hw), after.x1 - hw)) };
+    if (hh * 2 <= after.y1 - after.y0) c.at = { ...c.at, y: Math.round(Math.min(Math.max(c.at.y, after.y0 + hh), after.y1 - hh)) };
+  }
+
   // Items that no longer fit their resized room: try turning them, else leave them out.
   const fits = (f: FurnitureItem, r: Rect) => {
     const fr = itemFootprint(f);
@@ -682,6 +840,90 @@ export function resizeLayout(input: BuildingModel, outerW: number, outerH: numbe
   const ctx = new Ctx(model);
   fitBuilding(model, outerW, outerH, ctx);
   return { model, notes: ctx.assumptions };
+}
+
+/** The room whose clear rectangle sits in a corner of the building. */
+function roomAtCorner(model: BuildingModel, corner: Corner): Room | undefined {
+  const [a, b] = corner.split('-') as [Compass, Compass];
+  const sides = [compassToSide(a, model.northAngle), compassToSide(b, model.northAngle)];
+  const outer = buildingOuterRect(model);
+  const score = (r: Room) => {
+    const c = roomClearRect(model, r);
+    let d = 0;
+    for (const s of sides) d += s === 'top' ? c.y0 - outer.y0 : s === 'bottom' ? outer.y1 - c.y1 : s === 'left' ? c.x0 - outer.x0 : outer.x1 - c.x1;
+    return d;
+  };
+  return [...model.rooms].sort((x, y) => score(x) - score(y))[0];
+}
+
+/**
+ * Swap the use of two rooms: names, types, wet flag; furniture, stairs and lifts
+ * move to the other room keeping their distance to the nearer walls. Door and
+ * window labels that name a room follow it.
+ */
+function swapRooms(model: BuildingModel, a: Room, b: Room, ctx: Ctx) {
+  const ra = roomClearRect(model, a);
+  const rb = roomClearRect(model, b);
+  const fa = { name: a.name, kind: a.kind, wet: a.wet };
+  a.name = b.name;
+  a.kind = b.kind;
+  a.wet = b.wet;
+  b.name = fa.name;
+  b.kind = fa.kind;
+  b.wet = fa.wet;
+
+  const remap = (at: Point, w: number, h: number, from: Rect, to: Rect): Point => {
+    const gl = at.x - w / 2 - from.x0;
+    const gr = from.x1 - (at.x + w / 2);
+    const gt = at.y - h / 2 - from.y0;
+    const gb = from.y1 - (at.y + h / 2);
+    const x = gl <= gr ? to.x0 + gl + w / 2 : to.x1 - gr - w / 2;
+    const y = gt <= gb ? to.y0 + gt + h / 2 : to.y1 - gb - h / 2;
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+  const fits = (rect: Rect, room: Rect) => rect.x1 - rect.x0 <= room.x1 - room.x0 + 1 && rect.y1 - rect.y0 <= room.y1 - room.y0 + 1;
+
+  for (const f of [...model.furniture]) {
+    if (f.roomId !== a.id && f.roomId !== b.id) continue;
+    const [from, to, dest] = f.roomId === a.id ? [ra, rb, b] : [rb, ra, a];
+    const fp = itemFootprint(f);
+    f.at = remap(f.at, fp.x1 - fp.x0, fp.y1 - fp.y0, from, to);
+    f.roomId = dest.id;
+    if (!fits(itemFootprint(f), to)) {
+      f.rotation = (f.rotation + 90) % 360;
+      if (!fits(itemFootprint(f), to)) {
+        model.furniture = model.furniture.filter((x) => x.id !== f.id);
+        ctx.note(`${f.label} left out: it doesn't fit in ${dest.name}'s new room.`);
+        continue;
+      }
+    }
+    ctx.touch(f.id);
+  }
+  for (const c of coresOf(model)) {
+    if (c.roomId !== a.id && c.roomId !== b.id) continue;
+    const [from, to, dest] = c.roomId === a.id ? [ra, rb, b] : [rb, ra, a];
+    const fp = coreFootprint(c);
+    c.at = remap(c.at, fp.x1 - fp.x0, fp.y1 - fp.y0, from, to);
+    c.roomId = dest.id;
+    if (!fits(coreFootprint(c), to)) {
+      c.rotation = (c.rotation + 90) % 360;
+      if (!fits(coreFootprint(c), to)) ctx.note(`The ${c.label.toLowerCase()} doesn't fit in its new room; resize the room or move it.`);
+    }
+    ctx.touch(c.id);
+  }
+
+  // Door/window labels that start with a room's name follow that room's use.
+  const swapLabel = (label: string) =>
+    label.startsWith(`${b.name} `) ? `${a.name} ${label.slice(b.name.length + 1)}` : label.startsWith(`${a.name} `) ? `${b.name} ${label.slice(a.name.length + 1)}` : label;
+  for (const o of model.openings) {
+    const next = swapLabel(o.label);
+    if (next !== o.label) {
+      o.label = next;
+      ctx.touch(o.id);
+    }
+  }
+  ctx.touch(a.id, b.id);
+  if (a.wet !== b.wet) ctx.note('A wet room moved: check water supply and drainage, and the plumbing walls.');
 }
 
 /** Centre the building in the buildable area (or the plot when setbacks are zero). */

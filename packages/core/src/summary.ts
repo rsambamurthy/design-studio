@@ -56,6 +56,15 @@ export function modelSummary(model: BuildingModel): string {
     lines.push(`- ${f.id}: ${f.label} (${f.catalogueId}${hand}) in ${f.roomId}`);
   }
   lines.push('');
+  lines.push('STAIRS & LIFTS (id: label, room):');
+  const cores = model.cores ?? [];
+  if (cores.length === 0) lines.push('- none');
+  for (const c of cores) {
+    const room = model.rooms.find((r) => r.id === c.roomId);
+    const extra = c.stair ? `, ${c.stair.type}, ${c.stair.risers} risers` : '';
+    lines.push(`- ${c.id}: ${c.label} in ${room?.name ?? c.roomId}${extra}`);
+  }
+  lines.push('');
   lines.push(siteSummary(model));
   const issues = runChecks(model);
   lines.push('');
@@ -66,7 +75,7 @@ export function modelSummary(model: BuildingModel): string {
 
 export interface EntityMatch {
   id: string;
-  type: 'room' | 'wall' | 'opening' | 'furniture';
+  type: 'room' | 'wall' | 'opening' | 'furniture' | 'core';
   label: string;
   score: number;
 }
@@ -135,6 +144,10 @@ export function findEntities(model: BuildingModel, text: string): EntityMatch[] 
     const words = [f.label, ...(cat?.aliases ?? [])];
     const s = Math.max(...words.map((wd) => (q.includes(wd.toLowerCase()) ? 1 : overlap(wd))));
     if (s > 0.5) out.push({ id: f.id, type: 'furniture', label: f.label, score: s });
+  }
+  for (const c of model.cores ?? []) {
+    const words = c.kind === 'stair' ? ['stair', 'stairs', 'staircase', 'steps'] : ['lift', 'elevator'];
+    if (words.some((w) => new RegExp(`\\b${w}\\b`).test(q))) out.push({ id: c.id, type: 'core', label: c.label, score: 1.2 });
   }
   return out.sort((a, b) => b.score - a.score).slice(0, 5);
 }

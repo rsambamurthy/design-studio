@@ -3,7 +3,8 @@
  * with generic default sizes; fit_to_buildable resizes them to the user's plot.
  */
 import type { BuildingModel } from './model';
-import { resizeLayout } from './kernel';
+import { applyOperation, resizeLayout } from './kernel';
+import { parseOperation } from './ops';
 import { EXT, INT, L, PLUMB, opening, room, sampleModel, wall } from './seed';
 
 export interface Template {
@@ -107,12 +108,20 @@ function oneBhk(): BuildingModel {
   };
 }
 
+function threeBhk(): BuildingModel {
+  let m: BuildingModel = { ...resizeLayout(sampleModel(), L("48'"), L("34'")).model, id: 'template-3bhk', name: '3BHK Flat', levelName: 'Typical floor' };
+  // Common staircase and lift in the lobby.
+  m = applyOperation(m, parseOperation('add_stair', { roomId: 'r-lobby', type: 'dog-legged', corner: 'south-east' })).model;
+  m = applyOperation(m, parseOperation('add_lift', { roomId: 'r-lobby', persons: '6', corner: 'south-west' })).model;
+  return { ...m, revision: 1 };
+}
+
 export const TEMPLATES: Template[] = [
   {
     id: '3bhk',
     name: '3BHK flat',
     description: '3 bedrooms, 2 toilets, kitchen, living/dining, lift & stair lobby.',
-    build: () => ({ ...resizeLayout(sampleModel(), L("48'"), L("34'")).model, id: 'template-3bhk', name: '3BHK Flat', levelName: 'Typical floor' }),
+    build: threeBhk,
   },
   { id: '2bhk', name: '2BHK flat', description: '2 bedrooms, 2 toilets, kitchen, living/dining.', build: twoBhk },
   { id: '1bhk', name: '1BHK flat', description: '1 bedroom, toilet, wash, kitchen, living/dining.', build: oneBhk },

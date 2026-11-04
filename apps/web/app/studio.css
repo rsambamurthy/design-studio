@@ -262,3 +262,26 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .tpl-grid { grid-template-columns: repeat(4, 1fr); }
 @media (max-width: 900px) { .tpl-grid { grid-template-columns: 1fr 1fr; } }
 .tree-list li.tree-edit { display: block; padding: 8px; border: 1px solid var(--theme-accent); border-radius: var(--radius); background: #fff8f4; }
+
+/* ---------- Drag editing, stair & lift ---------- */
+.plan-svg .hit { stroke: transparent; fill: none; pointer-events: stroke; }
+.plan-svg.editable .drag { cursor: grab; }
+.plan-svg.editable .drag:active { cursor: grabbing; }
+.plan-svg.editable g.drag:hover .wall { stroke: var(--theme-primary); }
+.plan-svg.editable g.drag:hover .furniture rect, .plan-svg.editable g.drag:hover .core-box { stroke: var(--theme-primary); }
+.plan-svg .drag-readout { fill: var(--theme-primary); font-weight: 700; text-anchor: middle; font-family: var(--font); paint-order: stroke; stroke: #fff; stroke-width: 80px; }
+.plan-svg .core-hit { fill: transparent; }
+.plan-svg .core-box { fill: #f1f5f9; stroke: #475569; stroke-width: 30; }
+.plan-svg .core-line { stroke: #64748b; stroke-width: 22; }
+.plan-svg .core-tread { stroke: #94a3b8; stroke-width: 14; }
+.plan-svg .core-arrow { stroke: var(--theme-accent); stroke-width: 30; fill: none; marker-end: none; }
+.plan-svg .core-text { fill: #475569; font-weight: 700; text-anchor: middle; font-family: var(--font); }
+.plan-svg .core.hot .core-box { stroke: var(--theme-accent); fill: #fff4ed; }
+.plan-svg .tree.drag, .plan-svg .footprint.drag { cursor: grab; }
+.edit-status { font-size: 12px; color: var(--color-muted); margin: 8px 2px 0; }
+.edit-status.err { color: #991b1b; }
+/* Labels never block dragging the things under them. */
+.plan-svg text { pointer-events: none; }
+.plan-svg .tree .canopy { pointer-events: none; }
+/* Issue markers never block dragging the element they point at (messages are listed below the plan). */
+.plan-svg.editable .issue { pointer-events: none; }

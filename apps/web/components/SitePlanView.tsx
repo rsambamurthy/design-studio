@@ -15,9 +15,20 @@ import {
   type Issue,
   type PlanSide,
 } from '@ds/core';
+import Draggable, { type DragOp } from './Draggable';
 import ZoomSvg from './ZoomSvg';
 
-export default function SitePlanView({ model, issues, hot }: { model: BuildingModel; issues: Issue[]; hot: boolean }) {
+export default function SitePlanView({
+  model,
+  issues,
+  hot,
+  onEdit,
+}: {
+  model: BuildingModel;
+  issues: Issue[];
+  hot: boolean;
+  onEdit?: (request: string, ops: DragOp[]) => void;
+}) {
   const site = model.site;
   if (!site) {
     return (
@@ -101,7 +112,7 @@ export default function SitePlanView({ model, issues, hot }: { model: BuildingMo
   };
 
   return (
-    <ZoomSvg bounds={{ x0: 0, y0: 0, x1: W, y1: D }} pad={Math.max(W, D) * 0.12} label={`Site plan of ${model.name}`}>
+    <ZoomSvg bounds={{ x0: 0, y0: 0, x1: W, y1: D }} pad={Math.max(W, D) * 0.12} label={`Site plan of ${model.name}`} editable={!!onEdit}>
       <defs>
         <pattern id="setback-hatch" width="400" height="400" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
           <line x1="0" y1="0" x2="0" y2="400" className="hatch-line" />
@@ -120,18 +131,8 @@ export default function SitePlanView({ model, issues, hot }: { model: BuildingMo
       <rect x={0} y={0} width={W} height={D} className={`plot-line ${hot ? 'hot' : ''}`} />
       {(['top', 'bottom', 'left', 'right'] as PlanSide[]).map(setbackLabel)}
 
-      {/* Trees: canopy, protection zone, trunk */}
-      {site.trees.map((t) => (
-        <g key={t.id} className={`tree ${t.keep ? 'keep' : ''}`}>
-          <title>{`${t.label}${t.keep ? ' (to keep)' : ''}`}</title>
-          <circle cx={t.at.x} cy={t.at.y} r={t.canopyRadius} className="canopy" />
-          <circle cx={t.at.x} cy={t.at.y} r={t.protectRadius} className="protect" />
-          <circle cx={t.at.x} cy={t.at.y} r={180} className="trunk" />
-          <text x={t.at.x} y={t.at.y + t.protectRadius + font * 1.1} fontSize={font * 0.85} textAnchor="middle">{t.label}</text>
-        </g>
-      ))}
-
-      {/* Building footprint with its walls */}
+      {/* Building footprint with its walls (drag to move the building on the plot) */}
+      <Draggable label="the building" northAngle={model.northAngle} onEdit={onEdit} make={(direction, distance) => ({ op: 'move_building', args: { direction, distance } })}>
       <rect x={f.x0} y={f.y0} width={f.x1 - f.x0} height={f.y1 - f.y0} className={`footprint ${hot ? 'hot' : ''}`} />
       <g transform={`translate(${off.x} ${off.y})`}>
         {model.walls.map((w) => (
@@ -141,6 +142,20 @@ export default function SitePlanView({ model, issues, hot }: { model: BuildingMo
       <text x={mid.x} y={mid.y} fontSize={font * 1.1} textAnchor="middle" className="footprint-label">
         Building {formatLength(f.x1 - f.x0, u)} × {formatLength(f.y1 - f.y0, u)}
       </text>
+      </Draggable>
+
+      {/* Trees: canopy, protection zone, trunk */}
+      {site.trees.map((t) => (
+        <Draggable key={t.id} label={t.label} northAngle={model.northAngle} onEdit={onEdit} make={(direction, distance) => ({ op: 'move_tree', args: { treeId: t.id, direction, distance } })}>
+        <g className={`tree ${t.keep ? 'keep' : ''}`}>
+          <title>{`${t.label}${t.keep ? ' (to keep)' : ''}`}</title>
+          <circle cx={t.at.x} cy={t.at.y} r={t.canopyRadius} className="canopy" />
+          <circle cx={t.at.x} cy={t.at.y} r={t.protectRadius} className="protect" />
+          <circle cx={t.at.x} cy={t.at.y} r={180} className="trunk" />
+          <text x={t.at.x} y={t.at.y + t.protectRadius + font * 1.1} fontSize={font * 0.85} textAnchor="middle">{t.label}</text>
+        </g>
+        </Draggable>
+      ))}
 
       {(['top', 'bottom', 'left', 'right'] as PlanSide[]).map(gapLine)}
 

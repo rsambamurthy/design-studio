@@ -28,7 +28,7 @@ function index<T extends Keyed>(xs: T[]): Map<string, T> {
 }
 
 function collect(a: BuildingModel) {
-  return [...a.walls, ...a.openings, ...a.rooms, ...a.furniture] as Keyed[];
+  return [...a.walls, ...a.openings, ...a.rooms, ...a.furniture, ...(a.cores ?? [])] as Keyed[];
 }
 
 export function diffModels(before: BuildingModel, after: BuildingModel): ModelDiff {
