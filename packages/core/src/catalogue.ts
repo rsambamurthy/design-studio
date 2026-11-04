@@ -33,6 +33,9 @@ export const CATALOGUE: CatalogueItem[] = [
   { id: 'fridge-dd', name: 'Double-door fridge', category: 'appliance', width: 700, depth: 700, height: 1750, frontClearance: 900, aliases: ['fridge', 'refrigerator'], priceInr: [30000, 80000] },
   { id: 'washing-machine', name: 'Front-load washing machine', category: 'appliance', width: 600, depth: 600, height: 850, frontClearance: 700, aliases: ['washing machine', 'wm'], priceInr: [25000, 60000] },
   { id: 'wc-floor', name: 'Floor-mounted WC', category: 'sanitary', width: 380, depth: 700, height: 400, frontClearance: 600, aliases: ['wc', 'commode', 'toilet seat'], priceInr: [6000, 25000] },
+  { id: 'wash-basin', name: 'Wash basin', category: 'sanitary', width: 500, depth: 420, height: 850, frontClearance: 500, aliases: ['basin', 'wash basin', 'sink in toilet', 'lavatory'], priceInr: [2500, 15000] },
+  { id: 'shower', name: 'Shower area', category: 'sanitary', width: 900, depth: 900, height: 2100, frontClearance: 0, aliases: ['shower', 'shower area', 'bath area'], priceInr: [3000, 20000] },
+  { id: 'kitchen-counter', name: 'Kitchen counter with sink and hob', category: 'sanitary', width: 2400, depth: 600, height: 850, frontClearance: 900, aliases: ['kitchen counter', 'counter', 'platform', 'kitchen platform', 'cooking platform'], priceInr: [40000, 200000] },
   { id: 'car-sedan', name: 'Sedan', category: 'vehicle', width: 1750, depth: 4500, height: 1500, frontClearance: 0, aliases: ['sedan', 'car'], priceInr: undefined },
   { id: 'car-suv', name: 'Compact SUV', category: 'vehicle', width: 1800, depth: 4000, height: 1650, frontClearance: 0, aliases: ['suv', 'compact suv'], priceInr: undefined },
 ];

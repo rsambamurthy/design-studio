@@ -51,6 +51,20 @@ export const OperationSchemas = {
   flip_item: z.object({ itemId: id('furniture item') }).describe('Swap the hand of a handed item (e.g. chaise left <-> right).'),
   remove: z.object({ entityId: id('opening, furniture item, stair or lift') }).describe('Remove a door, window, furniture item, stair or lift.'),
   rename_room: z.object({ roomId: id('room'), name: z.string().min(1) }).describe('Rename a room.'),
+  move_room: z
+    .object({ roomId: id('room block'), direction: compass, distance })
+    .describe('Move a room (bedroom, toilet, lobby, kitchen…) as a block, with its walls, doors, furniture, stairs and lifts. It lines up with a wall when close. The open living space adjusts around it.'),
+  add_room: z
+    .object({
+      name: z.string().min(1),
+      kind: z.enum(['bedroom', 'toilet', 'kitchen', 'service', 'living', 'dining', 'balcony', 'lobby', 'pooja', 'stair', 'lift', 'other']),
+      width: distance.describe('Clear width'),
+      depth: distance.describe('Clear depth'),
+      inRoomId: id('open room to place it in (default: living/dining)').optional(),
+      corner: z.enum(['north-west', 'north-east', 'south-west', 'south-east']).optional(),
+    })
+    .describe('Add a new room block in free open space (against an outer wall). Drag or move_room it afterwards.'),
+  fit_out: z.object({ roomId: id('toilet or kitchen') }).describe('Add the standard fixtures: WC, wash basin (and shower when there is room) in a toilet; counter with sink and hob in a kitchen.'),
   set_room_use: z
     .object({
       roomId: id('room'),

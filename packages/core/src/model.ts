@@ -69,6 +69,13 @@ export interface Room {
    * never compass names: compass directions are resolved through northAngle only.
    */
   bounds: { top: string; bottom: string; left: string; right: string };
+  /**
+   * Present for a movable room block: its own rectangle (wall centre lines)
+   * and wall thickness. Its bounds are then virtual walls ("blk:<room>:<side>")
+   * generated from the rectangle, so the block moves as one piece. Sides that
+   * lie on a fixed wall use that wall's thickness and aren't drawn twice.
+   */
+  block?: { x0: Mm; y0: Mm; x1: Mm; y1: Mm; thickness: Mm };
 }
 
 export interface FurnitureItem {
@@ -174,7 +181,7 @@ export type Entity =
   | ({ type: 'core' } & CoreElement);
 
 export function findEntity(model: BuildingModel, id: string): Entity | undefined {
-  const w = model.walls.find((e) => e.id === id);
+  const w = model.walls.find((e) => e.id === id) ?? blockWall(model, id);
   if (w) return { type: 'wall', ...w };
   const o = model.openings.find((e) => e.id === id);
   if (o) return { type: 'opening', ...o };
@@ -189,8 +196,64 @@ export function findEntity(model: BuildingModel, id: string): Entity | undefined
 
 export function getWall(model: BuildingModel, id: string): Wall {
   const w = model.walls.find((e) => e.id === id);
-  if (!w) throw new ModelError(`No wall with id "${id}"`);
-  return w;
+  if (w) return w;
+  const v = blockWall(model, id);
+  if (v) return v;
+  throw new ModelError(`No wall with id "${id}"`);
+}
+
+const BLOCK_SIDES = ['top', 'bottom', 'left', 'right'] as const;
+
+/** Id of a block room's side wall. */
+export function blockWallId(roomId: string, side: PlanSide): string {
+  return `blk:${roomId}:${side}`;
+}
+
+/** Room and side of a block wall id, or undefined. */
+export function parseBlockWallId(id: string): { roomId: string; side: PlanSide } | undefined {
+  const m = /^blk:(.+):(top|bottom|left|right)$/.exec(id);
+  return m ? { roomId: m[1]!, side: m[2] as PlanSide } : undefined;
+}
+
+/** The fixed wall a block side lies on (same axis, covering the side), if any. */
+export function fixedWallUnder(model: BuildingModel, room: Room, side: PlanSide): Wall | undefined {
+  const b = room.block;
+  if (!b) return undefined;
+  const horizontal = side === 'top' || side === 'bottom';
+  const axis = side === 'top' ? b.y0 : side === 'bottom' ? b.y1 : side === 'left' ? b.x0 : b.x1;
+  const [lo, hi] = horizontal ? [b.x0, b.x1] : [b.y0, b.y1];
+  return model.walls.find((w) => {
+    const wh = Math.abs(w.a.y - w.b.y) < 1;
+    if (wh !== horizontal) return false;
+    const wAxis = horizontal ? w.a.y : w.a.x;
+    if (Math.abs(wAxis - axis) > 2) return false;
+    const [a, c] = horizontal ? [Math.min(w.a.x, w.b.x), Math.max(w.a.x, w.b.x)] : [Math.min(w.a.y, w.b.y), Math.max(w.a.y, w.b.y)];
+    return a <= lo + 2 && c >= hi - 2;
+  });
+}
+
+/** Synthesise a block room's side as a wall (top/bottom run left→right, left/right run top→bottom). */
+function blockWall(model: BuildingModel, id: string): Wall | undefined {
+  const p = parseBlockWallId(id);
+  if (!p) return undefined;
+  const room = model.rooms.find((r) => r.id === p.roomId);
+  const b = room?.block;
+  if (!room || !b) return undefined;
+  const fixed = fixedWallUnder(model, room, p.side);
+  const thickness = fixed ? Math.max(fixed.thickness, b.thickness) : b.thickness;
+  const ends: Record<PlanSide, [Point, Point]> = {
+    top: [{ x: b.x0, y: b.y0 }, { x: b.x1, y: b.y0 }],
+    bottom: [{ x: b.x0, y: b.y1 }, { x: b.x1, y: b.y1 }],
+    left: [{ x: b.x0, y: b.y0 }, { x: b.x0, y: b.y1 }],
+    right: [{ x: b.x1, y: b.y0 }, { x: b.x1, y: b.y1 }],
+  };
+  const [a, c] = ends[p.side];
+  return { id, a, b: c, thickness, kind: fixed ? fixed.kind : 'internal' };
+}
+
+/** Bounds for a block room: its four virtual walls. */
+export function blockBounds(roomId: string): Room['bounds'] {
+  return Object.fromEntries(BLOCK_SIDES.map((s) => [s, blockWallId(roomId, s)])) as Room['bounds'];
 }
 
 export function getRoom(model: BuildingModel, id: string): Room {

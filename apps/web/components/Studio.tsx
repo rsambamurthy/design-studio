@@ -6,6 +6,7 @@ import {
   buildingOuterRect,
   diffModels,
   formatLength,
+  getWall,
   revisionLetter,
   roomClearRect,
   runChecks,
@@ -68,21 +69,18 @@ type Tab = 'assistant' | 'site' | 'versions' | 'share';
 function examplesFor(m: BuildingModel): string[] {
   const out: string[] = [];
   const horizontal = (wallId: string) => {
-    const w = m.walls.find((x) => x.id === wallId);
-    return !!w && Math.abs(w.a.y - w.b.y) < 1;
+    try {
+      const w = getWall(m, wallId);
+      return Math.abs(w.a.y - w.b.y) < 1;
+    } catch {
+      return false;
+    }
   };
+  const block = m.rooms.find((r) => r.block && r.kind === 'bedroom');
+  if (block) out.push(`Move ${block.name} 3' south`);
   const door = m.openings.find((o) => o.kind === 'door' && horizontal(o.wallId) && o.label !== 'Main door');
   if (door) out.push(`Move the ${door.label} 6 inches east`);
   if (m.rooms.some((r) => r.kind === 'living')) out.push('Add a sofa with chaise on the right in the living room against the west wall');
-  for (const w of m.walls) {
-    if (horizontal(w.id) || w.kind === 'external') continue;
-    const left = m.rooms.find((r) => r.bounds.right === w.id);
-    const right = m.rooms.find((r) => r.bounds.left === w.id);
-    if (left && right) {
-      out.push(`Move the wall between ${left.name} and ${right.name} 6" west`);
-      break;
-    }
-  }
   return out.slice(0, 3);
 }
 
@@ -560,7 +558,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
             <PlanView model={model} changedIds={changed} issues={issues} onEdit={dragEdit} />
           )}
           <p className={`edit-status ${editStatus?.error ? 'err' : ''}`} role="status">
-            {editStatus ? editStatus.text : viewing ? 'Viewing an old revision: go back to current to edit.' : 'Tip: drag walls, doors, windows, furniture, stairs and lifts to move them (snaps to 1"). Drag a room by its name onto another room to swap them.'}
+            {editStatus ? editStatus.text : viewing ? 'Viewing an old revision: go back to current to edit.' : 'Tip: drag a room by its name to move it; drag its walls to resize it. Doors, windows, furniture, stairs and lifts drag too (snaps to 1").'}
           </p>
           <div className="checks">
             <span className={`badge ${counts.error ? 'badge-red' : 'badge-green'}`}>{plural(counts.error, 'error')}</span>

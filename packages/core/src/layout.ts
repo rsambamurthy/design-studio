@@ -5,7 +5,7 @@
  */
 import { applyOperation, hasAttachedToilet } from './kernel';
 import { roomClearRect } from './geometry';
-import { ModelError, type BuildingModel, type Opening, type Room } from './model';
+import { ModelError, blockWallId, parseBlockWallId, type BuildingModel, type Opening, type Room } from './model';
 import { parseOperation, type Operation } from './ops';
 import { buildableRect, buildingOuterRect } from './site';
 import { TEMPLATES, getTemplate } from './templates';
@@ -37,7 +37,31 @@ export function rotateLayout(input: BuildingModel): BuildingModel {
       o.swingSide = o.swingSide === 'left' ? 'right' : 'left';
     }
   }
+  // Block rooms: turn the rectangle; doors on its sides move to the side they now face.
+  const sideAfter = { top: 'right', right: 'bottom', bottom: 'left', left: 'top' } as const;
   for (const r of m.rooms as Room[]) {
+    const bl = r.block;
+    if (!bl) continue;
+    const before = new Map(m.openings.filter((o) => parseBlockWallId(o.wallId)?.roomId === r.id).map((o) => [o.id, { side: parseBlockWallId(o.wallId)!.side, len: o.offset }]));
+    const sideLen = { top: bl.x1 - bl.x0, bottom: bl.x1 - bl.x0, left: bl.y1 - bl.y0, right: bl.y1 - bl.y0 };
+    const p0 = rot({ x: bl.x0, y: bl.y0 });
+    const p1 = rot({ x: bl.x1, y: bl.y1 });
+    r.block = { ...bl, x0: Math.min(p0.x, p1.x), x1: Math.max(p0.x, p1.x), y0: Math.min(p0.y, p1.y), y1: Math.max(p0.y, p1.y) };
+    for (const o of m.openings) {
+      const was = before.get(o.id);
+      if (!was) continue;
+      const next = sideAfter[was.side];
+      o.wallId = blockWallId(r.id, next);
+      // Old top and bottom keep their running direction; old left and right reverse.
+      if (was.side === 'left' || was.side === 'right') {
+        o.offset = Math.round(sideLen[was.side] - was.len);
+        o.hinge = o.hinge === 'start' ? 'end' : 'start';
+        o.swingSide = o.swingSide === 'left' ? 'right' : 'left';
+      }
+    }
+  }
+  for (const r of m.rooms as Room[]) {
+    if (r.block) continue;
     const b = r.bounds;
     r.bounds = { top: b.left, right: b.top, bottom: b.right, left: b.bottom };
   }

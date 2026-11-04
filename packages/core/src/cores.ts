@@ -155,10 +155,12 @@ export function placeInCorner(model: BuildingModel, c: CoreElement, room: Room, 
  * snaps flush to a room wall when its own wall would otherwise clash with it.
  */
 export function settleCore(model: BuildingModel, c: CoreElement) {
-  const inRoom = model.rooms.find((r) => {
+  // Room blocks sit on top of the open space, so a block wins over the room around it.
+  const containing = model.rooms.filter((r) => {
     const rr = roomClearRect(model, r);
     return c.at.x >= rr.x0 && c.at.x <= rr.x1 && c.at.y >= rr.y0 && c.at.y <= rr.y1;
   });
+  const inRoom = containing.find((r) => r.block) ?? containing[0];
   if (inRoom) c.roomId = inRoom.id;
   const room = model.rooms.find((r) => r.id === c.roomId);
   if (!room) return;

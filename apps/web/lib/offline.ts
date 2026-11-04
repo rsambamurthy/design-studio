@@ -70,9 +70,15 @@ function planOps(model: BuildingModel, s: string): Operation[] {
     const [ref, a, b] = [m[1]!, m[2]!, m[3]!];
     const [distance, direction] = /^(north|south|east|west)$/.test(a) ? [b, a] : [a, b];
     const target = resolve(model, ref);
-    const name = target.type === 'opening' ? 'move_opening' : target.type === 'wall' ? 'move_wall' : target.type === 'furniture' ? 'move_item' : null;
-    if (!name) throw new Error(`I can't move a whole room yet; move one of its walls instead.`);
-    const idKey = name === 'move_opening' ? 'openingId' : name === 'move_wall' ? 'wallId' : 'itemId';
+    const name =
+      target.type === 'opening' ? 'move_opening'
+      : target.type === 'wall' ? 'move_wall'
+      : target.type === 'furniture' ? 'move_item'
+      : target.type === 'core' ? 'move_core'
+      : target.type === 'room' ? 'move_room'
+      : null;
+    if (!name) throw new Error(`I can't move that.`);
+    const idKey = { move_opening: 'openingId', move_wall: 'wallId', move_item: 'itemId', move_core: 'coreId', move_room: 'roomId' }[name];
     return [parseOperation(name, { [idKey]: target.id, direction, distance: distance.trim() })];
   }
 

@@ -31,7 +31,8 @@ export function modelSummary(model: BuildingModel): string {
     const sides = (['top', 'bottom', 'left', 'right'] as const)
       .map((s) => `${planSideCompass(s, model.northAngle)}=${r.bounds[s]}`)
       .join(' ');
-    lines.push(`- ${r.id}: ${r.name} (${r.kind}${r.wet ? ', wet' : ''}) ${roomSizeText(model, r)}; walls ${sides}`);
+    const what = r.block ? ', movable block' : model.rooms.some((x) => x.block) ? ', open space around the blocks' : '';
+    lines.push(`- ${r.id}: ${r.name} (${r.kind}${r.wet ? ', wet' : ''}${what}) ${roomSizeText(model, r)}; walls ${sides}`);
   }
   lines.push('');
   lines.push('WALLS (id: runs, thickness, kind, rooms it bounds):');

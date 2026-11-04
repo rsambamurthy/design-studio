@@ -6,6 +6,8 @@ import type { BuildingModel } from './model';
 import { applyOperation, resizeLayout } from './kernel';
 import { parseOperation } from './ops';
 import { EXT, INT, L, PLUMB, opening, room, sampleModel, wall } from './seed';
+import { toBlocks } from './blocks';
+import { fitOutAll } from './fixtures';
 
 export interface Template {
   id: string;
@@ -130,10 +132,10 @@ export const TEMPLATES: Template[] = [
     id: '3bhk',
     name: '3BHK flat',
     description: '3 bedrooms, 2 toilets, kitchen, living/dining, lobby with stair and lift.',
-    build: threeBhk,
+    build: () => fitOutAll(toBlocks(threeBhk())),
   },
-  { id: '2bhk', name: '2BHK flat', description: '2 bedrooms, 2 toilets, kitchen, living/dining.', build: twoBhk },
-  { id: '1bhk', name: '1BHK flat', description: '1 bedroom, toilet, wash, kitchen, living/dining.', build: oneBhk },
+  { id: '2bhk', name: '2BHK flat', description: '2 bedrooms, 2 toilets, kitchen, living/dining.', build: () => fitOutAll(toBlocks(twoBhk())) },
+  { id: '1bhk', name: '1BHK flat', description: '1 bedroom, toilet, wash, kitchen, living/dining.', build: () => fitOutAll(toBlocks(oneBhk())) },
 ];
 
 export function getTemplate(id: string): Template | undefined {

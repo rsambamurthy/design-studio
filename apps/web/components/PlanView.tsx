@@ -9,7 +9,9 @@
 import { useMemo, useState, type PointerEvent } from 'react';
 import {
   coreFootprint,
+  itemFootprint,
   enclosureOf,
+  blockWallRects,
   formatFtIn,
   formatLength,
   getCatalogueItem,
@@ -150,16 +152,45 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds }: Props & { bo
       return p.x >= c.x0 && p.x <= c.x1 && p.y >= c.y0 && p.y <= c.y1;
     });
   const [grab, setGrab] = useState<{ roomId: string; from: Vec } | null>(null);
+  /** The room a dragged room would swap with: for blocks, another block under the dragged room's centre. */
+  const dropOn = (roomId: string, p: Vec): Room | undefined => {
+    const self = model.rooms.find((x) => x.id === roomId);
+    if (self?.block) {
+      return model.rooms.find((x) => {
+        if (!x.block || x.id === roomId) return false;
+        const c = roomClearRect(model, x);
+        return p.x >= c.x0 && p.x <= c.x1 && p.y >= c.y0 && p.y <= c.y1;
+      });
+    }
+    const t = roomAt(p);
+    return t && t.id !== roomId ? t : undefined;
+  };
   const dropTarget = (() => {
     if (!grab || !preview || preview.id !== `room:${grab.roomId}`) return undefined;
-    const t = roomAt({ x: grab.from.x + preview.dx, y: grab.from.y + preview.dy });
-    return t && t.id !== grab.roomId ? t : undefined;
+    const t = dropOn(grab.roomId, { x: grab.from.x + preview.dx, y: grab.from.y + preview.dy });
+    return t;
   })();
 
-  /** Drag a room (by its name) onto another room: the two swap places. */
+  /**
+   * Drag a room by its name. A room block moves (snapping to 1"); a room fixed
+   * by walls (older designs) swaps places with the room it's dropped on.
+   */
   const dragRoom = (e: PointerEvent<SVGElement>, r: Room, from: Vec) => {
     if (!onEdit) return;
+    if (!r.block && (r.kind === 'living' || r.kind === 'dining') && model.rooms.some((x) => x.block)) return;
     setGrab({ roomId: r.id, from });
+    if (r.block) {
+      startDrag(e, `room:${r.id}`, free, (v) => {
+        setGrab(null);
+        const target = dropOn(r.id, { x: from.x + v.x, y: from.y + v.y });
+        if (target) {
+          onEdit(`Moved ${r.name} to where ${target.name} is`, [{ op: 'swap_rooms', args: { roomA: r.id, roomB: target.id } }]);
+          return;
+        }
+        freeMoves(v, r.name, (direction, distance) => ({ op: 'move_room', args: { roomId: r.id, direction, distance } }));
+      });
+      return;
+    }
     startDrag(e, `room:${r.id}`, (v) => v, (v) => {
       setGrab(null);
       const target = roomAt({ x: from.x + v.x, y: from.y + v.y });
@@ -171,7 +202,7 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds }: Props & { bo
   return (
     <>
       {/* Rooms (fills only; labels are drawn last so furniture never hides them) */}
-      {model.rooms.map((r) => {
+      {[...model.rooms].sort((a, b) => Number(!!a.block) - Number(!!b.block)).map((r) => {
         const c = roomClearRect(model, r);
         return <rect key={r.id} x={c.x0} y={c.y0} width={c.x1 - c.x0} height={c.y1 - c.y0} className={`room ${r.wet ? 'wet' : ''} ${r.kind === 'stair' || r.kind === 'lift' ? 'core-room' : ''} ${changedIds.has(r.id) ? 'hot' : ''}`} />;
       })}
@@ -184,6 +215,29 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds }: Props & { bo
           {onEdit && <line x1={wl.a.x} y1={wl.a.y} x2={wl.b.x} y2={wl.b.y} strokeWidth={Math.max(wl.thickness, 360)} className="hit" />}
         </g>
       ))}
+
+      {/* Room block walls (each block's own walls; drag one to resize the room) */}
+      {blockWallRects(model).map(({ id, rect }) => (
+        <g key={id} data-id={id} transform={shift(id)} className={onEdit ? 'drag' : undefined} onPointerDown={(e) => dragWall(e, id)}>
+          <title>{onEdit ? 'Drag to resize this room' : undefined}</title>
+          <rect x={rect.x0} y={rect.y0} width={rect.x1 - rect.x0} height={rect.y1 - rect.y0} className={`block-wall ${changedIds.has(id) || preview?.id === id ? 'hot' : ''}`} />
+          {onEdit && (() => {
+            const horizontal = rect.x1 - rect.x0 > rect.y1 - rect.y0;
+            const pad = 120;
+            return horizontal
+              ? <rect x={rect.x0} y={rect.y0 - pad} width={rect.x1 - rect.x0} height={rect.y1 - rect.y0 + 2 * pad} className="hit" />
+              : <rect x={rect.x0 - pad} y={rect.y0} width={rect.x1 - rect.x0 + 2 * pad} height={rect.y1 - rect.y0} className="hit" />;
+          })()}
+        </g>
+      ))}
+
+      {/* Ghost of a room block being dragged */}
+      {grab && !dropTarget && preview?.id === `room:${grab.roomId}` && (() => {
+        const r = model.rooms.find((x) => x.id === grab.roomId);
+        if (!r?.block) return null;
+        const b = r.block;
+        return <rect x={b.x0 + preview.dx} y={b.y0 + preview.dy} width={b.x1 - b.x0} height={b.y1 - b.y0} className="block-ghost" />;
+      })()}
 
       {/* Openings */}
       {model.openings.map((o) => (
@@ -233,8 +287,9 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds }: Props & { bo
       {model.rooms.map((r) => {
         const c = roomClearRect(model, r);
         const fs = Math.min(font, (c.x1 - c.x0) / 6.5, (c.y1 - c.y0) / 4);
-        const cx = (c.x0 + c.x1) / 2;
-        const cy = (c.y0 + c.y1) / 2;
+        let cx = (c.x0 + c.x1) / 2;
+        let cy = (c.y0 + c.y1) / 2;
+        if (!r.block && model.rooms.some((x) => x.block)) [cx, cy] = openLabelPoint(model, r);
         const grabW = Math.min(c.x1 - c.x0, Math.max(r.name.length * fs * 0.62, fs * 4));
         return (
           <g
@@ -465,6 +520,45 @@ function FurnitureShape({ f, hot }: { f: FurnitureItem; hot: boolean }) {
         </>
       );
       break;
+    case 'wc-floor':
+      body = (
+        <>
+          <rect x={x0} y={y0} width={W} height={220} rx={40} />
+          <ellipse cx={0} cy={y0 + 220 + (D - 220) / 2} rx={W / 2} ry={(D - 220) / 2} />
+          <ellipse cx={0} cy={y0 + 220 + (D - 220) / 2 + 20} rx={W / 2 - 70} ry={(D - 220) / 2 - 80} className="furn-detail" />
+        </>
+      );
+      break;
+    case 'wash-basin':
+      body = (
+        <>
+          <rect x={x0} y={y0} width={W} height={D} rx={60} />
+          <ellipse cx={0} cy={30} rx={W / 2 - 70} ry={D / 2 - 90} className="furn-detail" />
+        </>
+      );
+      break;
+    case 'shower':
+      body = (
+        <>
+          <rect x={x0} y={y0} width={W} height={D} className="furn-detail" />
+          <line x1={x0} y1={y0} x2={W / 2} y2={D / 2} className="furn-detail-line" />
+          <line x1={x0} y1={D / 2} x2={W / 2} y2={y0} className="furn-detail-line" />
+          <circle cx={0} cy={0} r={60} />
+        </>
+      );
+      break;
+    case 'kitchen-counter':
+      body = (
+        <>
+          <rect x={x0} y={y0} width={W} height={D} />
+          {/* Sink (double bowl) and hob (two burners) */}
+          <rect x={x0 + 250} y={y0 + 100} width={350} height={380} rx={40} className="furn-detail" />
+          <rect x={x0 + 650} y={y0 + 100} width={350} height={380} rx={40} className="furn-detail" />
+          <circle cx={W / 2 - 450} cy={0} r={130} className="furn-detail" />
+          <circle cx={W / 2 - 800} cy={0} r={130} className="furn-detail" />
+        </>
+      );
+      break;
     default:
       body = <rect x={x0} y={y0} width={W} height={D} />;
   }
@@ -481,4 +575,29 @@ function add(a: Point, b: Point): Point {
 }
 function scale(a: Point, k: number): Point {
   return { x: a.x * k, y: a.y * k };
+}
+
+/** Where to label an open room (living/dining): the free point farthest from any room block. */
+function openLabelPoint(model: BuildingModel, room: Room): [number, number] {
+  const c = roomClearRect(model, room);
+  const blocks = model.rooms.filter((r) => r.block).map((r) => r.block!);
+  const items = [...model.furniture.map((f) => itemFootprint(f)), ...(model.cores ?? []).map((k) => coreFootprint(k))];
+  let best: [number, number] = [(c.x0 + c.x1) / 2, (c.y0 + c.y1) / 2];
+  let bestD = -1;
+  const step = 300;
+  for (let x = c.x0 + 600; x <= c.x1 - 600; x += step) {
+    for (let y = c.y0 + 600; y <= c.y1 - 600; y += step) {
+      const dist = (r: { x0: number; x1: number; y0: number; y1: number }) => {
+        const dx = Math.max(r.x0 - x, 0, x - r.x1);
+        const dy = Math.max(r.y0 - y, 0, y - r.y1);
+        return Math.hypot(dx, dy);
+      };
+      const dBlocks = Math.min(Infinity, ...blocks.map(dist));
+      const dItems = Math.min(Infinity, ...items.map(dist));
+      const dWalls = Math.min(x - c.x0, c.x1 - x, y - c.y0, c.y1 - y);
+      const d = Math.min(dBlocks, dWalls * 1.5) + Math.min(dItems, 900) * 0.5;
+      if (dBlocks > 300 && d > bestD) [best, bestD] = [[x, y], d];
+    }
+  }
+  return best;
 }

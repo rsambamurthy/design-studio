@@ -307,3 +307,8 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .plan-svg .room-grab-hit { fill: transparent; pointer-events: all; }
 .plan-svg.editable .room-grab:hover .room-name { fill: var(--theme-primary); text-decoration: underline; }
 .plan-svg .drop-target { fill: rgba(49, 46, 129, .12); stroke: var(--theme-primary); stroke-width: 60; stroke-dasharray: 220 140; pointer-events: none; }
+
+.plan-svg .block-wall { fill: var(--color-text); }
+.plan-svg .block-wall.hot { fill: var(--theme-accent); }
+.plan-svg.editable g.drag:hover .block-wall { fill: var(--theme-primary); }
+.plan-svg .block-ghost { fill: rgba(49, 46, 129, .10); stroke: var(--theme-primary); stroke-width: 60; stroke-dasharray: 220 140; pointer-events: none; }

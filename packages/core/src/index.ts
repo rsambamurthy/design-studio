@@ -13,3 +13,5 @@ export * from './site';
 export * from './templates';
 export * from './layout';
 export * from './cores';
+export * from './blocks';
+export * from './fixtures';

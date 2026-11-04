@@ -5,9 +5,11 @@
  */
 import { getCatalogueItem, itemFootprint } from './catalogue';
 import { rectSize, rectsOverlap, roomClearRect, wallDir, pointOnWall, type Rect } from './geometry';
-import { getWall, type BuildingModel, type FurnitureItem, type Opening, type PlanSide, type Point } from './model';
+import { fixedWallUnder, getWall, type BuildingModel, type FurnitureItem, type Opening, type PlanSide, type Point } from './model';
 import { PLAN_SIDES, boundaryGaps, circleHitsRect, footprintOnPlot, sideToCompass } from './site';
 import { MAX_RISER, coresOf, enclosureOf } from './cores';
+import { blocksOverlap, coincidentSides } from './blocks';
+import { roomOpeningsOn } from './kernel';
 import { formatLength } from './units';
 
 export type Severity = 'error' | 'warning' | 'advisory';
@@ -93,6 +95,7 @@ export function runChecks(model: BuildingModel): Issue[] {
 
   issues.push(...coreChecks(model, swings));
   issues.push(...plumbingChecks(model));
+  issues.push(...blockChecks(model));
   issues.push(...siteChecks(model));
   return issues;
 }
@@ -160,6 +163,12 @@ function plumbingChecks(model: BuildingModel): Issue[] {
     if (!r.wet) continue;
     const walls = Object.values(r.bounds).map((id) => model.walls.find((w) => w.id === id));
     if (walls.some((w) => w && (w.kind === 'plumbing' || w.kind === 'external'))) continue;
+    if (r.block) {
+      // A block is fine against an outer wall, or back to back with another wet room.
+      const sides = ['top', 'bottom', 'left', 'right'] as const;
+      if (sides.some((sd) => fixedWallUnder(model, r, sd)?.kind === 'external')) continue;
+      if (sides.some((sd) => coincidentSides(model, r, sd).some((c) => c.room.wet))) continue;
+    }
     const c = roomClearRect(model, r);
     out.push({
       code: 'room.no-plumbing-wall',
@@ -292,3 +301,47 @@ function centre(r: Rect): Point {
   return { x: (r.x0 + r.x1) / 2, y: (r.y0 + r.y1) / 2 };
 }
 
+
+/** Room blocks: inside the outer walls, not overlapping each other, bedrooms with a window. */
+function blockChecks(model: BuildingModel): Issue[] {
+  const out: Issue[] = [];
+  const blocks = model.rooms.filter((r) => r.block);
+  if (blocks.length === 0) return out;
+  const xs = model.walls.flatMap((w) => [w.a.x, w.b.x]);
+  const ys = model.walls.flatMap((w) => [w.a.y, w.b.y]);
+  const shell = { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+  const centre = (r: Rect) => ({ x: (r.x0 + r.x1) / 2, y: (r.y0 + r.y1) / 2 });
+  blocks.forEach((r, i) => {
+    const b = r.block!;
+    if (b.x0 < shell.x0 - 2 || b.x1 > shell.x1 + 2 || b.y0 < shell.y0 - 2 || b.y1 > shell.y1 + 2) {
+      out.push({ code: 'block.outside', severity: 'error', message: `${r.name} sticks out of the building.`, entityIds: [r.id], at: centre(roomClearRect(model, r)) });
+    }
+    for (const o of blocks.slice(i + 1)) {
+      if (blocksOverlap(model, r, o)) {
+        const a = roomClearRect(model, r);
+        const c = roomClearRect(model, o);
+        const at = { x: (Math.max(a.x0, c.x0) + Math.min(a.x1, c.x1)) / 2, y: (Math.max(a.y0, c.y0) + Math.min(a.y1, c.y1)) / 2 };
+        out.push({ code: 'block.overlap', severity: 'error', message: `${r.name} overlaps ${o.name}.`, entityIds: [r.id, o.id], at });
+      }
+    }
+    if (r.kind === 'bedroom') {
+      const sides = ['top', 'bottom', 'left', 'right'] as const;
+      const hasWindow = sides.some((sd) => roomOpeningsOn(model, r, sd).some((x) => x.kind === 'window' || x.kind === 'sliding'));
+      if (!hasWindow) {
+        out.push({ code: 'room.no-window', severity: 'advisory', message: `${r.name} has no window; move it to an outer wall or add one.`, entityIds: [r.id], at: centre(roomClearRect(model, r)) });
+      }
+    }
+  });
+  // Stairs, lifts and furniture belong to the block they stand in.
+  for (const c of model.cores ?? []) {
+    const inBlock = blocks.find((r) => {
+      const rr = roomClearRect(model, r);
+      return c.at.x > rr.x0 && c.at.x < rr.x1 && c.at.y > rr.y0 && c.at.y < rr.y1;
+    });
+    const own = model.rooms.find((r) => r.id === c.roomId);
+    if (inBlock && inBlock.id !== c.roomId && !own?.block) {
+      out.push({ code: 'core.under-room', severity: 'error', message: `The ${c.label.toLowerCase()} is under ${inBlock.name}.`, entityIds: [c.id, inBlock.id], at: c.at });
+    }
+  }
+  return out;
+}
