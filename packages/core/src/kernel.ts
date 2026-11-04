@@ -1210,6 +1210,12 @@ function roomAtCorner(model: BuildingModel, corner: Corner): Room | undefined {
 function swapRooms(model: BuildingModel, a: Room, b: Room, ctx: Ctx) {
   const ra = roomClearRect(model, a);
   const rb = roomClearRect(model, b);
+  // Which of the two rooms the main door opens into (it follows that room's use).
+  const serves = (room: Room, o: Opening) => SIDES4.some((side) => roomOpeningsOn(model, room, side).some((x) => x.id === o.id));
+  const main = model.openings.find((o) => /^main door$/i.test(o.label));
+  const mainWith = main ? (serves(a, main) ? a : serves(b, main) ? b : undefined) : undefined;
+  const mainName = mainWith?.name;
+  const otherName = mainWith ? (mainWith === a ? b.name : a.name) : undefined;
   const fa = { name: a.name, kind: a.kind, wet: a.wet };
   a.name = b.name;
   a.kind = b.kind;
@@ -1251,11 +1257,25 @@ function swapRooms(model: BuildingModel, a: Room, b: Room, ctx: Ctx) {
     const fp = coreFootprint(c);
     c.at = remap(c.at, fp.x1 - fp.x0, fp.y1 - fp.y0, from, to);
     c.roomId = dest.id;
-    if (!fits(coreFootprint(c), to)) {
-      c.rotation = (c.rotation + 90) % 360;
-      if (!fits(coreFootprint(c), to)) ctx.note(`The ${c.label.toLowerCase()} doesn't fit in its new room; resize the room or move it.`);
-    }
     ctx.touch(c.id);
+  }
+  // Stairs and lifts that now stick out, clash or face a wall go to a free corner.
+  for (const c of coresOf(model)) {
+    if (c.roomId !== a.id && c.roomId !== b.id) continue;
+    const dest = c.roomId === a.id ? a : b;
+    const rr = roomClearRect(model, dest);
+    const enc = enclosureOf(model, c);
+    const o = enc.outer;
+    const outside = o.x0 < rr.x0 - 5 || o.x1 > rr.x1 + 5 || o.y0 < rr.y0 - 5 || o.y1 > rr.y1 + 5;
+    const clash = coresOf(model).some((d) => d.id !== c.id && rectsOverlap(o, enclosureOf(model, d).outer, 5));
+    if (!outside && !clash && !enc.entryBlocked) continue;
+    const saved = { at: c.at, rotation: c.rotation };
+    try {
+      ctx.placeCore(c, dest);
+    } catch {
+      Object.assign(c, saved);
+      ctx.note(`The ${c.label.toLowerCase()} doesn't fit well in ${dest.name}'s new space; drag it or resize the room.`);
+    }
   }
 
   // Door/window labels that start with a room's name follow that room's use.
@@ -1266,6 +1286,17 @@ function swapRooms(model: BuildingModel, a: Room, b: Room, ctx: Ctx) {
     if (next !== o.label) {
       o.label = next;
       ctx.touch(o.id);
+    }
+  }
+  // The room that had the main door now sits where the other room was: its door
+  // there becomes the main door, and the old main door goes with the other room.
+  if (main && mainName && otherName) {
+    const newMain = model.openings.find((o) => o.label === `${mainName} door`);
+    if (newMain) {
+      newMain.label = main.label;
+      main.label = `${otherName} door`;
+      ctx.touch(newMain.id, main.id);
+      ctx.note(`The main door is now the door into ${mainName}'s new place.`);
     }
   }
   ctx.touch(a.id, b.id);

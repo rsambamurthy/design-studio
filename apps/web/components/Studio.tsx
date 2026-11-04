@@ -560,7 +560,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
             <PlanView model={model} changedIds={changed} issues={issues} onEdit={dragEdit} />
           )}
           <p className={`edit-status ${editStatus?.error ? 'err' : ''}`} role="status">
-            {editStatus ? editStatus.text : viewing ? 'Viewing an old revision: go back to current to edit.' : 'Tip: drag walls, doors, windows, furniture, stairs and lifts to move them (snaps to 1").'}
+            {editStatus ? editStatus.text : viewing ? 'Viewing an old revision: go back to current to edit.' : 'Tip: drag walls, doors, windows, furniture, stairs and lifts to move them (snaps to 1"). Drag a room by its name onto another room to swap them.'}
           </p>
           <div className="checks">
             <span className={`badge ${counts.error ? 'badge-red' : 'badge-green'}`}>{plural(counts.error, 'error')}</span>

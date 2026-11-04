@@ -69,6 +69,22 @@ describe('stair and lift', () => {
     expect(runChecks(r.model).some((i) => i.code === 'core.entry-blocked')).toBe(true);
   });
 
+  it('moving the lobby (swapping it with a room of similar size) takes the stair and lift along', () => {
+    const m = startDesign('3bhk', [op('set_plot', { eastWest: "60'", northSouth: "40'" })], 'T').model;
+    const r = apply(m, 'swap_rooms', { roomA: 'r-lobby', roomB: 'r-bed3' });
+    expect(room(r.model, 'Lobby').id).toBe('r-bed3');
+    expect(r.model.cores!.every((c) => c.roomId === 'r-bed3')).toBe(true);
+    expect(r.model.openings.find((o) => o.id === 'd-bed3')!.label).toBe('Main door');
+    expect(r.model.openings.find((o) => o.id === 'd-main')!.label).toBe('Bed 3 door');
+    expect(runChecks(r.model).filter((i) => i.code.startsWith('core') && i.severity !== 'advisory')).toEqual([]);
+  });
+
+  it('says so when the stair and lift don\'t fit the lobby\'s new space', () => {
+    const m = TEMPLATES.find((t) => t.id === '3bhk')!.build();
+    const r = apply(m, 'swap_rooms', { roomA: 'r-lobby', roomB: 'r-bed3' });
+    expect(r.assumptions.join(' ')).toMatch(/doesn't fit well in Lobby's new space/);
+  });
+
   it('starting a design can drop the lift, or both', () => {
     const plot = [op('set_plot', { eastWest: "60'", northSouth: "40'" })];
     expect(startDesign('3bhk', plot, 'T', { core: 'stair' }).model.cores!.map((c) => c.kind)).toEqual(['stair']);

@@ -24,6 +24,7 @@ import {
   type FurnitureItem,
   type Issue,
   type Opening,
+  type Room,
   type Point,
 } from '@ds/core';
 import ZoomSvg, { useDrag, type Vec } from './ZoomSvg';
@@ -142,6 +143,31 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds }: Props & { bo
 
   const free = (v: Vec) => ({ x: snap(v.x), y: snap(v.y) });
 
+  /** Room under a point (clear area). */
+  const roomAt = (p: Vec) =>
+    model.rooms.find((r) => {
+      const c = roomClearRect(model, r);
+      return p.x >= c.x0 && p.x <= c.x1 && p.y >= c.y0 && p.y <= c.y1;
+    });
+  const [grab, setGrab] = useState<{ roomId: string; from: Vec } | null>(null);
+  const dropTarget = (() => {
+    if (!grab || !preview || preview.id !== `room:${grab.roomId}`) return undefined;
+    const t = roomAt({ x: grab.from.x + preview.dx, y: grab.from.y + preview.dy });
+    return t && t.id !== grab.roomId ? t : undefined;
+  })();
+
+  /** Drag a room (by its name) onto another room: the two swap places. */
+  const dragRoom = (e: PointerEvent<SVGElement>, r: Room, from: Vec) => {
+    if (!onEdit) return;
+    setGrab({ roomId: r.id, from });
+    startDrag(e, `room:${r.id}`, (v) => v, (v) => {
+      setGrab(null);
+      const target = roomAt({ x: from.x + v.x, y: from.y + v.y });
+      if (!target || target.id === r.id) return;
+      onEdit(`Moved ${r.name} to where ${target.name} is`, [{ op: 'swap_rooms', args: { roomA: r.id, roomB: target.id } }]);
+    });
+  };
+
   return (
     <>
       {/* Rooms (fills only; labels are drawn last so furniture never hides them) */}
@@ -196,14 +222,32 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds }: Props & { bo
         </g>
       ))}
 
-      {/* Room labels, scaled to fit small rooms, with a halo for legibility */}
+      {/* Drop target while a room is being dragged */}
+      {dropTarget && (() => {
+        const c = roomClearRect(model, dropTarget);
+        return <rect x={c.x0} y={c.y0} width={c.x1 - c.x0} height={c.y1 - c.y0} className="drop-target" />;
+      })()}
+
+      {/* Room labels, scaled to fit small rooms, with a halo for legibility.
+          Drag a room by its name onto another room to swap them. */}
       {model.rooms.map((r) => {
         const c = roomClearRect(model, r);
         const fs = Math.min(font, (c.x1 - c.x0) / 6.5, (c.y1 - c.y0) / 4);
         const cx = (c.x0 + c.x1) / 2;
         const cy = (c.y0 + c.y1) / 2;
+        const grabW = Math.min(c.x1 - c.x0, Math.max(r.name.length * fs * 0.62, fs * 4));
         return (
-          <g key={`l-${r.id}`} className="room-label">
+          <g
+            key={`l-${r.id}`}
+            className={`room-label ${onEdit ? 'room-grab' : ''}`}
+            transform={shift(`room:${r.id}`)}
+            onPointerDown={(e) => dragRoom(e, r, { x: cx, y: cy })}
+          >
+            {onEdit && (
+              <rect x={cx - grabW / 2} y={cy - fs * 1.2} width={grabW} height={fs * 2.6} className="room-grab-hit">
+                <title>{`Drag ${r.name} onto another room to swap them`}</title>
+              </rect>
+            )}
             <text x={cx} y={cy - fs * 0.2} className="room-name" fontSize={fs}>{r.name}</text>
             <text x={cx} y={cy + fs * 1.05} className="room-size" fontSize={fs * 0.78}>{roomSizeText(model, r)}</text>
           </g>

@@ -302,3 +302,8 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .plan-svg .core-wall { fill: var(--color-text); }
 .plan-svg .core.hot .core-wall { fill: var(--theme-accent); }
 .plan-svg.editable g.drag:hover .core-wall { fill: var(--theme-primary); }
+
+.plan-svg.editable .room-grab { cursor: grab; }
+.plan-svg .room-grab-hit { fill: transparent; pointer-events: all; }
+.plan-svg.editable .room-grab:hover .room-name { fill: var(--theme-primary); text-decoration: underline; }
+.plan-svg .drop-target { fill: rgba(49, 46, 129, .12); stroke: var(--theme-primary); stroke-width: 60; stroke-dasharray: 220 140; pointer-events: none; }
