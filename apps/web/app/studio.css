@@ -1,0 +1,102 @@
+/* Design Studio screen, built on the SmartAppt tokens in smartappt-theme.css. */
+
+.sa-mg.disabled { color: var(--color-muted); cursor: default; }
+.sa-mg.disabled .sa-mg-chev { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; }
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(300px, 360px) 1fr;
+  gap: 16px;
+  margin-top: 16px;
+  align-items: start;
+}
+
+/* ---------- Chat ---------- */
+.chat { display: flex; flex-direction: column; gap: 10px; height: min(640px, calc(100dvh - 190px)); min-height: 420px; }
+.chat-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; }
+.msg { font-size: 13px; line-height: 1.45; padding: 9px 12px; border-radius: var(--radius); max-width: 92%; overflow-wrap: anywhere; }
+.msg.user { align-self: flex-end; background: var(--theme-accent-light); }
+.msg.ai { align-self: flex-start; background: var(--color-bg); border: 1px solid var(--color-border); }
+.msg.ai.error { background: #fee2e2; border-color: #fecaca; color: #991b1b; }
+.msg.typing { color: var(--color-muted); font-style: italic; }
+.msg .assume { display: block; margin-top: 6px; font-size: 11.5px; color: var(--color-muted); }
+.msg .delta { display: block; margin-top: 4px; font-size: 11.5px; font-weight: 600; color: var(--color-success); }
+.msg .delta.warn { color: var(--theme-accent); }
+.msg .mode { display: block; margin-top: 4px; font-size: 10.5px; color: var(--color-muted); text-transform: uppercase; letter-spacing: .04em; }
+.msg .options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.msg .options button { padding: .3rem .7rem; font-size: 12px; }
+.examples { display: flex; flex-direction: column; gap: 6px; }
+.example { text-align: left; font-size: 12px; padding: .4rem .7rem; }
+.chat-input { display: flex; gap: 8px; }
+.chat-input input { flex: 1; min-width: 0; }
+
+/* ---------- Plan ---------- */
+.plan-card { min-width: 0; }
+.canvas-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tab { font-size: 12.5px; font-weight: 600; padding: 5px 12px; border-radius: var(--radius-pill); color: var(--color-muted); }
+.tab.on { background: var(--theme-accent-light); color: var(--theme-accent); }
+.tab.off { opacity: .6; }
+.history-btns { margin-left: auto; display: flex; gap: 6px; }
+.history-btns button { padding: .35rem .75rem; }
+
+.plan-wrap { position: relative; background: #fff; border: 1px solid var(--color-border); border-radius: 6px; overflow: hidden; }
+.plan-toolbar {
+  position: absolute; bottom: 8px; right: 8px; z-index: 2;
+  display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end;
+  background: rgba(255, 255, 255, .92); padding: 4px; border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.plan-toolbar button { min-width: 34px; height: 32px; padding: 0 8px; font-size: 14px; line-height: 1; }
+.plan-toolbar-sep { width: 1px; background: var(--color-border); margin: 2px 2px; }
+.plan-svg { display: block; width: 100%; height: min(520px, 62dvh); min-height: 300px; touch-action: none; cursor: grab; user-select: none; }
+.plan-svg:active { cursor: grabbing; }
+
+.plan-svg .room { fill: #fff; }
+.plan-svg .room.wet { fill: #eef6ff; }
+.plan-svg .room.hot { fill: #fff4ed; }
+.plan-svg .room-label text { paint-order: stroke; stroke: rgba(255, 255, 255, .85); stroke-width: 60px; stroke-linejoin: round; }
+.plan-svg .room-name { fill: var(--color-text); font-weight: 600; text-anchor: middle; font-family: var(--font); }
+.plan-svg .room-size { fill: var(--color-muted); text-anchor: middle; font-family: var(--font); }
+.plan-svg .wall { stroke: var(--color-text); }
+.plan-svg .wall.hot { stroke: var(--theme-accent); }
+.plan-svg .opening-gap { stroke: #fff; }
+.plan-svg .door-leaf { stroke: var(--color-text); stroke-width: 40; }
+.plan-svg .door-arc { fill: none; stroke: var(--color-muted); stroke-width: 22; stroke-dasharray: 70 50; }
+.plan-svg .window-line { stroke: #2563eb; stroke-width: 24; }
+.plan-svg .opening.hot .door-leaf,
+.plan-svg .opening.hot .door-arc,
+.plan-svg .opening.hot .window-line { stroke: var(--theme-accent); }
+.plan-svg .furniture rect { fill: #f8fafc; stroke: #94a3b8; stroke-width: 22; }
+.plan-svg .furniture .furn-detail { fill: #e2e8f0; }
+.plan-svg .furniture .furn-detail-line { stroke: #cbd5e1; stroke-width: 16; }
+.plan-svg .furniture.hot rect { stroke: var(--theme-accent); fill: #fff4ed; }
+.plan-svg .issue circle { stroke: #fff; stroke-width: 40; }
+.plan-svg .issue text { fill: #fff; font-weight: 700; text-anchor: middle; font-family: var(--font); }
+.plan-svg .issue.error circle { fill: var(--color-danger); }
+.plan-svg .issue.warning circle { fill: var(--color-warning); }
+.plan-svg .issue.advisory circle { fill: #94a3b8; }
+.plan-svg .dim line { stroke: var(--color-muted); stroke-width: 18; }
+.plan-svg .dim text { fill: var(--color-muted); text-anchor: middle; font-family: var(--font); }
+.plan-svg .north polygon { fill: var(--theme-primary); }
+.plan-svg .north text { fill: var(--theme-primary); font-weight: 700; text-anchor: middle; font-family: var(--font); }
+
+.checks { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.issue-list { margin: 10px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--color-muted); }
+.issue-list li.error { color: #991b1b; }
+.issue-list li.warning { color: #a16207; }
+
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 16px; }
+.stat-card .value { font-size: 28px; line-height: 42px; }
+.linkish { background: none; border: none; padding: 0; color: var(--theme-accent); font-size: inherit; text-decoration: underline; cursor: pointer; }
+
+/* ---------- Mobile (WhatsApp in-app browser included) ---------- */
+@media (max-width: 900px) {
+  .workspace { grid-template-columns: 1fr; }
+  .plan-card { order: -1; }
+  .chat { height: auto; min-height: 0; }
+  .chat-log { max-height: 46dvh; }
+  .stats { grid-template-columns: 1fr; gap: 10px; }
+  .hide-sm { display: none !important; }
+  .sa-main h1 { font-size: 20px; line-height: 28px; }
+}

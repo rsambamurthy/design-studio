@@ -1,0 +1,16 @@
+{
+  "name": "design-studio",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI-native residential design tool (India-first)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @ds/web",
+    "build": "npm run build -w @ds/web",
+    "test": "npm test -w @ds/core",
+    "typecheck": "npm run typecheck -w @ds/core && npm run typecheck -w @ds/web"
+  }
+}

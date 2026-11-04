@@ -1,0 +1,414 @@
+/**
+ * The deterministic kernel. Applies one typed operation to a model and returns
+ * a NEW model (the input is never mutated), a one-line summary, the
+ * assumptions it made, and every entity id it touched (for ripple tracking).
+ */
+import { getCatalogueItem, itemFootprint } from './catalogue';
+import {
+  compassVector,
+  isHorizontal,
+  pointOnWall,
+  planSideCompass,
+  rectSize,
+  roomClearRect,
+  vectorToCompass,
+  wallDir,
+  wallLength,
+  type Compass,
+  type Rect,
+} from './geometry';
+import {
+  ModelError,
+  findEntity,
+  getRoom,
+  getWall,
+  type BuildingModel,
+  type FurnitureItem,
+  type Opening,
+  type Point,
+  type Room,
+  type Wall,
+} from './model';
+import type { Operation } from './ops';
+import { formatLength, parseLength } from './units';
+
+export interface OpResult {
+  model: BuildingModel;
+  summary: string;
+  assumptions: string[];
+  changedIds: string[];
+}
+
+/** Minimum gap between an opening edge and the end of its wall segment. */
+const JAMB_MIN = 100;
+
+export function applyOperation(input: BuildingModel, operation: Operation): OpResult {
+  const model: BuildingModel = structuredClone(input);
+  const ctx = new Ctx(model);
+  const { op, args } = operation;
+
+  switch (op) {
+    case 'move_opening': {
+      const o = ctx.opening(args.openingId);
+      const wall = getWall(model, o.wallId);
+      const d = ctx.length(args.distance);
+      const sign = ctx.alongWallSign(wall, args.direction, o.label);
+      const next = o.offset + sign * d;
+      ctx.checkOpeningFits(wall, next, o.width, o.label);
+      o.offset = next;
+      ctx.touch(o.id, wall.id);
+      ctx.summary = `Moved ${o.label} ${formatLength(d, model.displayUnits)} ${args.direction}.`;
+      ctx.note(`"${args.direction}" taken from the plan's north arrow (${describeNorth(model)}).`);
+      break;
+    }
+
+    case 'centre_opening': {
+      const o = ctx.opening(args.openingId);
+      const wall = getWall(model, o.wallId);
+      const room = args.roomId ? getRoom(model, args.roomId) : ctx.roomOnWall(wall.id);
+      const [s0, s1] = ctx.roomSpanAlongWall(room, wall);
+      o.offset = Math.round((s0 + s1) / 2);
+      ctx.touch(o.id, wall.id);
+      ctx.summary = `Centred ${o.label} on the ${room.name} wall.`;
+      ctx.note(`Centred on ${room.name}'s clear (inside-face) span, ${formatLength(s1 - s0, model.displayUnits)}.`);
+      break;
+    }
+
+    case 'set_opening_width': {
+      const o = ctx.opening(args.openingId);
+      const wall = getWall(model, o.wallId);
+      const w = ctx.length(args.width);
+      ctx.checkOpeningFits(wall, o.offset, w, o.label);
+      const before = o.width;
+      o.width = w;
+      ctx.touch(o.id, wall.id);
+      ctx.summary = `${o.label} width ${formatLength(before, model.displayUnits)} → ${formatLength(w, model.displayUnits)}.`;
+      ctx.note('Width is the clear opening; the centre stayed fixed.');
+      break;
+    }
+
+    case 'add_opening': {
+      const wall = getWall(model, args.wallId);
+      const w = ctx.length(args.width);
+      let offset: number;
+      if (args.roomId) {
+        const [s0, s1] = ctx.roomSpanAlongWall(getRoom(model, args.roomId), wall);
+        offset = Math.round((s0 + s1) / 2);
+      } else {
+        offset = Math.round(wallLength(wall) / 2);
+      }
+      ctx.checkOpeningFits(wall, offset, w, args.label);
+      const o: Opening = {
+        id: ctx.newId(args.kind === 'window' ? 'win' : 'door'),
+        label: args.label,
+        wallId: wall.id,
+        kind: args.kind,
+        offset,
+        width: w,
+        height: args.kind === 'window' ? 1200 : 2100,
+        swingSide: 'left',
+        hinge: 'start',
+      };
+      model.openings.push(o);
+      ctx.touch(o.id, wall.id);
+      ctx.summary = `Added ${args.label} (${formatLength(w, model.displayUnits)}).`;
+      ctx.note('Placed centred on the wall span; say "move it" to shift it.');
+      break;
+    }
+
+    case 'move_wall': {
+      const wall = getWall(model, args.wallId);
+      const d = ctx.length(args.distance);
+      const v = compassVector(args.direction, model.northAngle);
+      const horizontal = isHorizontal(wall);
+      const component = horizontal ? v.y : v.x;
+      if (Math.abs(component) < 0.7) {
+        const runs = vectorToCompass(wallDir(wall), model.northAngle);
+        throw new ModelError(
+          `That wall runs ${axisName(runs)}, so it can only move ${horizontal ? perpNames(model, 'y') : perpNames(model, 'x')}, not ${args.direction}.`,
+        );
+      }
+      const delta = Math.sign(component) * d;
+      ctx.moveWall(wall, delta);
+      ctx.summary = `Moved wall ${formatLength(d, model.displayUnits)} ${args.direction}.`;
+      ctx.note(`Wall axis moved; rooms on both sides resized. Direction from the north arrow (${describeNorth(model)}).`);
+      break;
+    }
+
+    case 'place_item': {
+      const cat = getCatalogueItem(args.catalogueId);
+      if (!cat) throw new ModelError(`Unknown catalogue item "${args.catalogueId}"`);
+      const room = getRoom(model, args.roomId);
+      const r = roomClearRect(model, room);
+      const side = ctx.planSideFor(room, args.against);
+      const rotation = { top: 0, right: 90, bottom: 180, left: 270 }[side];
+      const half = cat.depth / 2;
+      const at: Point = {
+        top: { x: (r.x0 + r.x1) / 2, y: r.y0 + half },
+        bottom: { x: (r.x0 + r.x1) / 2, y: r.y1 - half },
+        left: { x: r.x0 + half, y: (r.y0 + r.y1) / 2 },
+        right: { x: r.x1 - half, y: (r.y0 + r.y1) / 2 },
+      }[side];
+      const item: FurnitureItem = {
+        id: ctx.newId('f'),
+        catalogueId: cat.id,
+        label: args.label ?? cat.name,
+        roomId: room.id,
+        at: { x: Math.round(at.x), y: Math.round(at.y) },
+        rotation,
+        mirrored: cat.handed ? args.hand === 'left' : false,
+      };
+      model.furniture.push(item);
+      ctx.touch(item.id, room.id);
+      ctx.summary = `Placed ${item.label} (${formatLength(cat.width, model.displayUnits)} × ${formatLength(cat.depth, model.displayUnits)}) in ${room.name}, back against the ${args.against} wall, centred along it.`;
+      if (cat.handed) {
+        ctx.note(`Chaise on the ${args.hand ?? 'right'} as seen sitting on it.`);
+      }
+      break;
+    }
+
+    case 'move_item': {
+      const f = ctx.item(args.itemId);
+      const d = ctx.length(args.distance);
+      const v = compassVector(args.direction, model.northAngle);
+      f.at = { x: Math.round(f.at.x + v.x * d), y: Math.round(f.at.y + v.y * d) };
+      ctx.touch(f.id);
+      ctx.summary = `Moved ${f.label} ${formatLength(d, model.displayUnits)} ${args.direction}.`;
+      ctx.note(`Direction from the north arrow (${describeNorth(model)}).`);
+      break;
+    }
+
+    case 'centre_item': {
+      const f = ctx.item(args.itemId);
+      const room = getRoom(model, f.roomId);
+      const r = roomClearRect(model, room);
+      const ns = compassVector('north', model.northAngle);
+      const nsIsVertical = Math.abs(ns.y) > Math.abs(ns.x);
+      const axis = args.axis ?? 'both';
+      const centreX = axis === 'both' || (axis === 'east-west') === nsIsVertical;
+      const centreY = axis === 'both' || (axis === 'north-south') === nsIsVertical;
+      if (centreX) f.at = { ...f.at, x: Math.round((r.x0 + r.x1) / 2) };
+      if (centreY) f.at = { ...f.at, y: Math.round((r.y0 + r.y1) / 2) };
+      ctx.touch(f.id);
+      ctx.summary = `Centred ${f.label} in ${room.name}${axis === 'both' ? '' : ` (${axis})`}.`;
+      ctx.note('Centred on the room\'s clear (inside-face) dimensions.');
+      break;
+    }
+
+    case 'rotate_item': {
+      const f = ctx.item(args.itemId);
+      f.rotation = (((f.rotation + Number(args.degrees)) % 360) + 360) % 360;
+      ctx.touch(f.id);
+      ctx.summary = `Rotated ${f.label} ${args.degrees}°.`;
+      ctx.note('Rotation is clockwise as seen on the plan, about the item centre.');
+      break;
+    }
+
+    case 'flip_item': {
+      const f = ctx.item(args.itemId);
+      const cat = getCatalogueItem(f.catalogueId);
+      if (!cat?.handed) throw new ModelError(`${f.label} has no left/right version.`);
+      f.mirrored = !f.mirrored;
+      ctx.touch(f.id);
+      ctx.summary = `${f.label}: extension now on the ${f.mirrored ? 'left' : 'right'}.`;
+      ctx.note('Left/right as seen sitting on it.');
+      break;
+    }
+
+    case 'remove': {
+      const e = findEntity(model, args.entityId);
+      if (!e) throw new ModelError(`Nothing with id "${args.entityId}"`);
+      if (e.type === 'opening') {
+        model.openings = model.openings.filter((o) => o.id !== e.id);
+        ctx.touch(e.id, e.wallId);
+      } else if (e.type === 'furniture') {
+        model.furniture = model.furniture.filter((f) => f.id !== e.id);
+        ctx.touch(e.id, e.roomId);
+      } else {
+        throw new ModelError('Only doors, windows and furniture can be removed in this version.');
+      }
+      ctx.summary = `Removed ${e.label}.`;
+      break;
+    }
+
+    case 'rename_room': {
+      const room = getRoom(model, args.roomId);
+      const before = room.name;
+      room.name = args.name;
+      ctx.touch(room.id);
+      ctx.summary = `Renamed ${before} to ${args.name}.`;
+      break;
+    }
+  }
+
+  model.revision = input.revision + 1;
+  return { model, summary: ctx.summary, assumptions: ctx.assumptions, changedIds: [...ctx.changed] };
+}
+
+class Ctx {
+  summary = '';
+  assumptions: string[] = [];
+  changed = new Set<string>();
+  constructor(private model: BuildingModel) {}
+
+  touch(...ids: string[]) {
+    ids.forEach((i) => this.changed.add(i));
+  }
+
+  note(text: string) {
+    this.assumptions.push(text);
+  }
+
+  length(text: string): number {
+    const p = parseLength(text);
+    if (p.note) this.note(p.note);
+    if (p.mm <= 0) throw new ModelError('Length must be greater than zero.');
+    return p.mm;
+  }
+
+  newId(prefix: string): string {
+    const used = new Set([
+      ...this.model.walls.map((e) => e.id),
+      ...this.model.openings.map((e) => e.id),
+      ...this.model.rooms.map((e) => e.id),
+      ...this.model.furniture.map((e) => e.id),
+    ]);
+    let n = 1;
+    while (used.has(`${prefix}-${n}`)) n++;
+    return `${prefix}-${n}`;
+  }
+
+  opening(id: string): Opening {
+    const o = this.model.openings.find((e) => e.id === id);
+    if (!o) throw new ModelError(`No door or window with id "${id}"`);
+    return o;
+  }
+
+  item(id: string): FurnitureItem {
+    const f = this.model.furniture.find((e) => e.id === id);
+    if (!f) throw new ModelError(`No furniture item with id "${id}"`);
+    return f;
+  }
+
+  /** +1 / -1 for moving along a wall in a compass direction; error if perpendicular. */
+  alongWallSign(wall: Wall, dir: Compass, label: string): 1 | -1 {
+    const v = compassVector(dir, this.model.northAngle);
+    const w = wallDir(wall);
+    const dot = v.x * w.x + v.y * w.y;
+    if (Math.abs(dot) < 0.7) {
+      const runs = vectorToCompass(w, this.model.northAngle);
+      throw new ModelError(`${label} is on a wall running ${axisName(runs)}, so it can't move ${dir}.`);
+    }
+    return dot > 0 ? 1 : -1;
+  }
+
+  checkOpeningFits(wall: Wall, offset: number, width: number, label: string) {
+    const len = wallLength(wall);
+    const start = offset - width / 2;
+    const end = offset + width / 2;
+    if (start < JAMB_MIN || end > len - JAMB_MIN) {
+      throw new ModelError(
+        `${label} would run past the end of its wall (needs ${formatLength(JAMB_MIN, this.model.displayUnits)} at each end).`,
+      );
+    }
+  }
+
+  roomOnWall(wallId: string): Room {
+    const r = this.model.rooms.find((room) => Object.values(room.bounds).includes(wallId));
+    if (!r) throw new ModelError('That wall does not bound any room; name the room to centre within.');
+    return r;
+  }
+
+  /** Clear span of a room along a wall, as offsets from wall.a. */
+  roomSpanAlongWall(room: Room, wall: Wall): [number, number] {
+    const r = roomClearRect(this.model, room);
+    const d = wallDir(wall);
+    const horizontal = isHorizontal(wall);
+    const [lo, hi] = horizontal ? [r.x0, r.x1] : [r.y0, r.y1];
+    const base = horizontal ? wall.a.x : wall.a.y;
+    const sign = horizontal ? Math.sign(d.x) : Math.sign(d.y);
+    const a = (lo - base) * sign;
+    const b = (hi - base) * sign;
+    return [Math.min(a, b), Math.max(a, b)];
+  }
+
+  planSideFor(room: Room, dir: Compass): 'top' | 'bottom' | 'left' | 'right' {
+    for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+      if (planSideCompass(side, this.model.northAngle) === dir) return side;
+    }
+    throw new ModelError(`${room.name} has no ${dir} wall at this orientation.`);
+  }
+
+  /**
+   * Move an axis-aligned wall perpendicular to itself by delta (mm, plan axis).
+   * Walls meeting its ends stretch; openings keep their physical position.
+   */
+  moveWall(wall: Wall, delta: number) {
+    const horizontal = isHorizontal(wall);
+    const key: 'x' | 'y' = horizontal ? 'y' : 'x';
+    const old = wall.a[key];
+    const spanKey: 'x' | 'y' = horizontal ? 'x' : 'y';
+    const lo = Math.min(wall.a[spanKey], wall.b[spanKey]) - 1;
+    const hi = Math.max(wall.a[spanKey], wall.b[spanKey]) + 1;
+
+    const openingPos = new Map<string, Point>();
+    for (const o of this.model.openings) openingPos.set(o.id, pointOnWall(getWall(this.model, o.wallId), o.offset));
+
+    wall.a = { ...wall.a, [key]: old + delta };
+    wall.b = { ...wall.b, [key]: old + delta };
+    this.touch(wall.id);
+
+    for (const other of this.model.walls) {
+      if (other.id === wall.id) continue;
+      for (const end of ['a', 'b'] as const) {
+        const p = other[end];
+        if (Math.abs(p[key] - old) < 1 && p[spanKey] >= lo && p[spanKey] <= hi) {
+          other[end] = { ...p, [key]: old + delta };
+          this.touch(other.id);
+        }
+      }
+    }
+
+    // Openings on any changed wall keep their physical position (re-project offset);
+    // openings on the moved wall itself travel with it.
+    for (const o of this.model.openings) {
+      if (o.wallId === wall.id || !this.changed.has(o.wallId)) continue;
+      const w = getWall(this.model, o.wallId);
+      const p = openingPos.get(o.id)!;
+      const d = wallDir(w);
+      o.offset = Math.round((p.x - w.a.x) * d.x + (p.y - w.a.y) * d.y);
+      this.touch(o.id);
+    }
+    for (const o of this.model.openings) if (o.wallId === wall.id) this.touch(o.id);
+
+    for (const room of this.model.rooms) {
+      if (Object.values(room.bounds).some((id) => this.changed.has(id))) this.touch(room.id);
+    }
+  }
+}
+
+function axisName(c: Compass): string {
+  return c === 'north' || c === 'south' ? 'north–south' : 'east–west';
+}
+
+function perpNames(model: BuildingModel, planAxis: 'x' | 'y'): string {
+  const v = planAxis === 'y' ? { x: 0, y: -1 } : { x: 1, y: 0 };
+  const a = vectorToCompass(v, model.northAngle);
+  const b = vectorToCompass({ x: -v.x, y: -v.y }, model.northAngle);
+  return `${a} or ${b}`;
+}
+
+export function describeNorth(model: BuildingModel): string {
+  if (model.northAngle === 0) return 'north is up on the plan';
+  return `north is ${model.northAngle}° clockwise from plan-up`;
+}
+
+/** Room size as displayed: clear dimensions, plan width × plan depth. */
+export function roomSizeText(model: BuildingModel, room: Room): string {
+  const { w, h } = rectSize(roomClearRect(model, room));
+  return `${formatLength(w, model.displayUnits)} × ${formatLength(h, model.displayUnits)}`;
+}
+
+export function itemRect(f: FurnitureItem): Rect {
+  return itemFootprint(f);
+}
