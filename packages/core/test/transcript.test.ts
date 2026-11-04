@@ -100,3 +100,32 @@ describe('door placement details', () => {
     expect(r.assumptions.join(' ')).toMatch(/Removed Toilet 1's door to the living area/);
   });
 });
+
+describe('changing the plot while working', () => {
+  it('a bigger plot: the outer walls grow to the new buildable area, rooms keep their sizes, rooms on the east wall move with it', () => {
+    let m = apply(shell(), 'add_room', { kind: 'bedroom', x: 200, y: 200 });
+    m = apply(m, 'add_room', { kind: 'toilet', x: 99999, y: 200 });
+    const bedBefore = roomClearRect(m, room(m, 'Bed 1'));
+    const t = room(m, 'Toilet 1').block!;
+    const r = applyOperation(m, op('set_plot', { eastWest: "70'", northSouth: "45'" }));
+    const outer = r.model.walls;
+    const xs = outer.flatMap((w) => [w.a.x, w.b.x]);
+    const ys = outer.flatMap((w) => [w.a.y, w.b.y]);
+    // 70' − 10' setbacks = 60' outside, 45' − 10' = 35'
+    expect(Math.abs(Math.max(...xs) - Math.min(...xs) + 230 - 18288)).toBeLessThanOrEqual(1);
+    expect(Math.abs(Math.max(...ys) - Math.min(...ys) + 230 - 10668)).toBeLessThanOrEqual(1);
+    const bedAfter = roomClearRect(r.model, room(r.model, 'Bed 1'));
+    expect(Math.round(bedAfter.x1 - bedAfter.x0)).toBe(Math.round(bedBefore.x1 - bedBefore.x0));
+    expect(room(r.model, 'Toilet 1').block!.x1).toBe(Math.max(...xs));
+    expect(room(r.model, 'Toilet 1').block!.x1 - room(r.model, 'Toilet 1').block!.x0).toBe(t.x1 - t.x0);
+    expect(r.assumptions.join(' ')).toMatch(/Outer walls now 60'0" × 35'0"/);
+    expect(runChecks(r.model).filter((i) => i.space === 'site' && i.severity !== 'advisory')).toEqual([]);
+  });
+
+  it('a bigger setback shrinks the building; rooms that would stick out come back in', () => {
+    let m = apply(shell(), 'add_room', { kind: 'bedroom', x: 99999, y: 99999 });
+    const r = applyOperation(m, op('set_setback', { side: 'east', distance: "15'" }));
+    expect(errors(r.model).filter((i) => i.code === 'block.outside')).toEqual([]);
+    expect(runChecks(r.model).filter((i) => i.code === 'site.setback')).toEqual([]);
+  });
+});

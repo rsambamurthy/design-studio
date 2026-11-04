@@ -269,7 +269,8 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       ctx.touch('site');
       ctx.summary = `Plot set to ${formatLength(ew, model.displayUnits)} (E–W) × ${formatLength(ns, model.displayUnits)} (N–S).`;
       if (creating) ctx.note('Setbacks start at 0 until you set them; the building was centred on the plot.');
-      else ctx.note('The building was re-centred in the buildable area.');
+      else if (!model.rooms.some((r) => r.block) && !model.walls.every((w) => w.kind === 'external')) ctx.note('The building was re-centred in the buildable area.');
+      if (!creating) followSite(model, ctx);
       break;
     }
 
@@ -284,6 +285,7 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
           ? `Setbacks set to ${formatLength(d, model.displayUnits)} on all sides.`
           : `${cap(args.side)} setback set to ${formatLength(d, model.displayUnits)}.`;
       ctx.note('Setbacks are measured from the plot boundary to the building\'s outer wall face.');
+      followSite(model, ctx);
       break;
     }
 
@@ -422,6 +424,12 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
 
     case 'fit_to_buildable': {
       const site = ctx.site();
+      if (args.rooms !== 'scale' && (model.rooms.some((r) => r.block) || model.walls.every((w) => w.kind === 'external'))) {
+        const { before, after } = fitShell(model, ctx);
+        ctx.summary = `Outer walls now fill the buildable area: ${formatLength(after.x1 - after.x0, model.displayUnits)} × ${formatLength(after.y1 - after.y0, model.displayUnits)} outside (was ${formatLength(before.x1 - before.x0, model.displayUnits)} × ${formatLength(before.y1 - before.y0, model.displayUnits)}).`;
+        ctx.note('Rooms kept their sizes; rooms against an outer wall moved with it.');
+        break;
+      }
       const b = buildableRect(site);
       const before = buildingOuterRect(model);
       fitBuilding(model, b.x1 - b.x0, b.y1 - b.y0, ctx);
@@ -1177,8 +1185,13 @@ class Ctx {
     // Room blocks lying on this wall keep to it.
     const riders = this.model.rooms.flatMap((r) => (r.block ? SIDES4.filter((sd) => fixedWallUnder(this.model, r, sd)?.id === wall.id).map((sd) => ({ r, sd })) : []));
     this.moveFixedWall(wall, delta);
+    // A room against this wall moves with it (keeping its size), unless it spans to the opposite wall too.
+    const opposite = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' } as const;
     for (const { r, sd } of riders) {
-      resizeBlockSide(this.model, r, sd, delta);
+      const spans = !!fixedWallUnder(this.model, r, opposite[sd]);
+      if (spans) resizeBlockSide(this.model, r, sd, delta);
+      else translateBlock(this.model, r, sd === 'left' || sd === 'right' ? delta : 0, sd === 'top' || sd === 'bottom' ? delta : 0);
+      for (const f of this.model.furniture) if (f.roomId === r.id) this.touch(f.id);
       this.touch(r.id);
     }
   }
@@ -1494,6 +1507,71 @@ function rehomeDoors(model: BuildingModel, room: Room, ctx: Ctx) {
     ctx.touch(o.id);
     ctx.note(`${o.label} moved to the ${planSideCompass(to, model.northAngle)} side, since its wall is now an outer wall.`);
   }
+}
+
+/**
+ * Room-block designs: make the outer walls fill the buildable area. Rooms keep
+ * their sizes; rooms against an outer wall move with it; anything that would
+ * end up outside is pulled back in. The building sits in the buildable area.
+ */
+function fitShell(model: BuildingModel, ctx: Ctx): { before: Rect; after: Rect } {
+  const site = ctx.site();
+  const b = buildableRect(site);
+  const before = buildingOuterRect(model);
+  const W = b.x1 - b.x0;
+  const H = b.y1 - b.y0;
+  if (W < 3000 || H < 3000) throw new ModelError('The setbacks leave too little room to build; reduce them or enlarge the plot.');
+  const ext = model.walls.filter((w) => w.kind === 'external');
+  const vertical = ext.filter((w) => Math.abs(w.a.x - w.b.x) < 1);
+  const horizontal = ext.filter((w) => Math.abs(w.a.y - w.b.y) < 1);
+  const east = [...vertical].sort((p, q) => q.a.x - p.a.x)[0];
+  const south = [...horizontal].sort((p, q) => q.a.y - p.a.y)[0];
+  if (!east || !south) throw new ModelError('The outer walls could not be found.');
+  const dW = Math.round(W - (before.x1 - before.x0));
+  const dH = Math.round(H - (before.y1 - before.y0));
+  if (dW) ctx.moveWall(east, dW);
+  if (dH) ctx.moveWall(south, dH);
+  // Rooms now sticking out come back in; stairs and lifts too.
+  for (const r of model.rooms) {
+    if (!r.block) continue;
+    const pulled = clampBlockInside(model, r);
+    if (pulled.dx || pulled.dy) {
+      ctx.touch(r.id);
+      ctx.note(`${r.name} moved in to stay inside the smaller building.`);
+    }
+  }
+  for (const c of coresOf(model)) {
+    const room = model.rooms.find((r) => r.id === c.roomId);
+    if (!room) continue;
+    const rr = roomClearRect(model, room);
+    const fp = coreFootprint(c);
+    const dx = fp.x1 > rr.x1 ? rr.x1 - fp.x1 : fp.x0 < rr.x0 ? rr.x0 - fp.x0 : 0;
+    const dy = fp.y1 > rr.y1 ? rr.y1 - fp.y1 : fp.y0 < rr.y0 ? rr.y0 - fp.y0 : 0;
+    if (dx || dy) {
+      c.at = { x: Math.round(c.at.x + dx), y: Math.round(c.at.y + dy) };
+      ctx.touch(c.id);
+    }
+  }
+  const after = buildingOuterRect(model);
+  const f = footprintOnPlot(model, site);
+  site.buildingOffset = { x: Math.round(site.buildingOffset.x + b.x0 - f.x0), y: Math.round(site.buildingOffset.y + b.y0 - f.y0) };
+  for (const w of model.walls) ctx.touch(w.id);
+  ctx.touch('site');
+  return { before, after };
+}
+
+/** After a plot or setback change: block designs follow it at once; older layouts are told how. */
+function followSite(model: BuildingModel, ctx: Ctx) {
+  const u = model.displayUnits;
+  if (model.rooms.some((r) => r.block) || model.walls.every((w) => w.kind === 'external')) {
+    const { before, after } = fitShell(model, ctx);
+    const same = Math.abs(after.x1 - after.x0 - (before.x1 - before.x0)) < 1 && Math.abs(after.y1 - after.y0 - (before.y1 - before.y0)) < 1;
+    if (!same) {
+      ctx.note(`Outer walls now ${formatLength(after.x1 - after.x0, u)} × ${formatLength(after.y1 - after.y0, u)} (were ${formatLength(before.x1 - before.x0, u)} × ${formatLength(before.y1 - before.y0, u)}), filling the buildable area. Rooms kept their sizes.`);
+    }
+    return;
+  }
+  ctx.note('This layout has fixed walls, so it was not resized. Use "Fit layout to plinth" to resize it to the new buildable area.');
 }
 
 /** Standard clear sizes for new room blocks. */

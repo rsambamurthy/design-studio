@@ -9,6 +9,7 @@ import { ModelError, blockWallId, parseBlockWallId, type BuildingModel, type Ope
 import { parseOperation, type Operation } from './ops';
 import { buildableRect, buildingOuterRect } from './site';
 import { TEMPLATES, getTemplate } from './templates';
+import { sampleModel } from './seed';
 import { formatLength } from './units';
 
 const SQFT = 92903.04;
@@ -137,9 +138,11 @@ export function startDesign(templateId: string, siteOps: Operation[], name: stri
   if (!first) throw new ModelError('Pick a starting layout.');
 
   // 1. Site on a provisional model.
+  // Site first, on a fixed-wall scratch layout (so nothing is resized yet).
+  let scratch: BuildingModel = { ...sampleModel(), name, revision: 1 };
+  for (const op of siteOps) scratch = applyOperation(scratch, op).model;
   let model: BuildingModel = { ...first.build(), name, revision: 1 };
-  for (const op of siteOps) model = applyOperation(model, op).model;
-  const site = model.site;
+  const site = scratch.site;
 
   if (!site) {
     if (auto) throw new ModelError('Enter the plot size so a layout can be chosen for it.');
@@ -171,7 +174,7 @@ export function startDesign(templateId: string, siteOps: Operation[], name: stri
   notes.push(`Started from ${choice.reason}`);
 
   // 3. Size it to the plinth.
-  const fit = parseOperation('fit_to_buildable', {});
+  const fit = parseOperation('fit_to_buildable', template.id === 'shell' ? {} : { rooms: 'scale' });
   model = applyOperation(model, fit).model;
   if (template.finish) model = template.finish(model);
   notes.push(`sized to the ${formatLength(pw, 'ft-in')} × ${formatLength(ph, 'ft-in')} plinth`);
