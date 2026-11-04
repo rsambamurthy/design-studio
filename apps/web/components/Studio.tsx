@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
+  buildableRect,
   buildingOuterRect,
   diffModels,
   formatLength,
@@ -63,11 +64,27 @@ interface Share {
 
 type Tab = 'assistant' | 'site' | 'versions' | 'share';
 
-const EXAMPLES = [
-  'Move the Bed 2 door 8 inches east',
-  'Add a sofa with chaise on the right in the living room against the west wall',
-  'Move the wall between Bed 2 and the kitchen 6" west',
-];
+/** Example requests built from the design's own rooms, so they always make sense. */
+function examplesFor(m: BuildingModel): string[] {
+  const out: string[] = [];
+  const horizontal = (wallId: string) => {
+    const w = m.walls.find((x) => x.id === wallId);
+    return !!w && Math.abs(w.a.y - w.b.y) < 1;
+  };
+  const door = m.openings.find((o) => o.kind === 'door' && horizontal(o.wallId) && o.label !== 'Main door');
+  if (door) out.push(`Move the ${door.label} 6 inches east`);
+  if (m.rooms.some((r) => r.kind === 'living')) out.push('Add a sofa with chaise on the right in the living room against the west wall');
+  for (const w of m.walls) {
+    if (horizontal(w.id) || w.kind === 'external') continue;
+    const left = m.rooms.find((r) => r.bounds.right === w.id);
+    const right = m.rooms.find((r) => r.bounds.left === w.id);
+    if (left && right) {
+      out.push(`Move the wall between ${left.name} and ${right.name} 6" west`);
+      break;
+    }
+  }
+  return out.slice(0, 3);
+}
 
 export default function Studio({ email, initial }: { email: string; initial: DesignDetail }) {
   const [design, setDesign] = useState<DesignDetail>(initial);
@@ -356,7 +373,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
               </div>
               {log.length <= 1 && design.revisions.length <= 1 && (
                 <div className="examples">
-                  {EXAMPLES.map((e) => (
+                  {examplesFor(design.model).map((e) => (
                     <button key={e} className="btn-secondary example" onClick={() => void send(e)} disabled={busy}>{e}</button>
                   ))}
                 </div>
@@ -497,7 +514,18 @@ export default function Studio({ email, initial }: { email: string; initial: Des
       <div className="stats">
         <div className="card stat-card"><div className="value">{carpetSqFt.toLocaleString('en-IN')} sq ft</div><div className="label">Carpet area (clear, excl. lobby)</div></div>
         <div className="card stat-card"><div className="value">Rev {revisionLetter(design.currentRev)}</div><div className="label">{design.revisions.length} saved revisions</div></div>
-        <div className="card stat-card"><div className="value">{model.furniture.length}</div><div className="label">Furniture items placed</div></div>
+        <div className="card stat-card">
+          <div className="value">{Math.round(((outer.x1 - outer.x0) * (outer.y1 - outer.y0)) / 92903.04).toLocaleString('en-IN')} sq ft</div>
+          <div className="label">
+            Plinth area
+            {model.site
+              ? (() => {
+                  const b = buildableRect(model.site);
+                  return ` · limit ${Math.round(((b.x1 - b.x0) * (b.y1 - b.y0)) / 92903.04).toLocaleString('en-IN')} sq ft`;
+                })()
+              : ''}
+          </div>
+        </div>
       </div>
     </AppShell>
   );

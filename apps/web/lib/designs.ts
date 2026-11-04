@@ -3,7 +3,7 @@
  * ownership. Models are produced on the server (by the kernel), never accepted
  * from the browser, so stored revisions always come from validated operations.
  */
-import { applyOperation, getTemplate, parseOperation, type BuildingModel, type Operation } from '@ds/core';
+import { parseOperation, startDesign, type BuildingModel, type Operation } from '@ds/core';
 import { getDb, newId, type Db } from './db';
 import { AuthError } from './auth';
 
@@ -66,40 +66,28 @@ export interface NewDesignInput {
   template?: unknown;
   /** Site operations ({ op, args }) applied before saving Rev A, e.g. set_plot, set_setback. */
   siteOps?: unknown;
-  /** Resize the layout to fill the buildable area once the plot is set. */
-  fit?: unknown;
 }
 
 export async function createDesign(userId: string, input: NewDesignInput): Promise<string> {
   const name = cleanName(input.name);
-  const template = getTemplate(String(input.template ?? '3bhk'));
-  if (!template) throw new AuthError('Pick a starting layout.');
-  let model: BuildingModel = { ...template.build(), name, revision: 1 };
-
+  const templateId = String(input.template ?? 'auto');
   const raw = Array.isArray(input.siteOps) ? input.siteOps.slice(0, 30) : [];
-  const ops: Operation[] = [];
-  const notes: string[] = [`Started from the ${template.name} template`];
+  let model: BuildingModel;
+  let ops: Operation[];
+  let notes: string[];
   try {
-    for (const o of raw) {
+    const siteOps = raw.map((o: unknown) => {
       const { op, args } = (o ?? {}) as { op?: unknown; args?: unknown };
       const parsed = parseOperation(String(op), args);
-      if (!parsed.op.startsWith('set_') && !['add_tree', 'place_building', 'remove_access'].includes(parsed.op)) {
+      if (!['set_plot', 'set_setback', 'set_access', 'add_tree'].includes(parsed.op)) {
         throw new Error(`"${parsed.op}" can't be used when creating a design.`);
       }
-      ops.push(parsed);
-    }
-    for (const op of ops) model = applyOperation(model, op).model;
-    if (model.site) notes.push('plot and setbacks entered');
-    if (input.fit === true && model.site) {
-      const fitOp = parseOperation('fit_to_buildable', {});
-      model = applyOperation(model, fitOp).model;
-      ops.push(fitOp);
-      notes.push('layout sized to the buildable area');
-    }
+      return parsed;
+    });
+    ({ model, ops, notes } = startDesign(templateId, siteOps, name));
   } catch (err) {
     throw new AuthError(err instanceof Error ? err.message : String(err));
   }
-  model = { ...model, revision: 1 };
 
   const db = await getDb();
   const id = newId(12);

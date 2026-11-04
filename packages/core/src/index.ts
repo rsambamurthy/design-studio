@@ -11,3 +11,4 @@ export * from './seed';
 export * from './compare';
 export * from './site';
 export * from './templates';
+export * from './layout';

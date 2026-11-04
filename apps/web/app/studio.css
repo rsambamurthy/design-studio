@@ -253,3 +253,11 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
   .tpl-grid { grid-template-columns: 1fr 1fr; }
   .field-grid.three { grid-template-columns: 1fr 1fr; }
 }
+.plan-svg .plinth-label { fill: var(--theme-accent); font-weight: 600; font-family: var(--font); }
+.tpl-card.auto { justify-content: center; background: linear-gradient(160deg, #fff, #f5f3ff); }
+.tpl-card.auto.on { background: linear-gradient(160deg, #fff8f4, #f5f3ff); }
+.tpl-auto-mark { font-size: 30px; color: var(--theme-primary); line-height: 1; margin-bottom: 8px; }
+.nd-plinth { margin: 4px 0 0; padding: 8px 10px; border-radius: var(--radius); background: #eef2ff; color: var(--theme-primary); font-size: 13px; font-weight: 600; }
+.nd-plinth.bad { background: #fee2e2; color: #991b1b; }
+.tpl-grid { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 900px) { .tpl-grid { grid-template-columns: 1fr 1fr; } }

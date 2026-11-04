@@ -56,8 +56,10 @@ describe('fit_to_buildable', () => {
     expect(m.openings.find((o) => o.id === 'd-main')!.width).toBe(before.openings.find((o) => o.id === 'd-main')!.width);
   });
 
-  it('refuses to stretch a 1BHK across a large plot', () => {
-    expect(() => run(TEMPLATES[2]!.build(), ...vaidyasSite, ['fit_to_buildable', {}])).toThrow(/too different/);
+  it('refuses to stretch a 1BHK across a very large plot', () => {
+    expect(() =>
+      run(TEMPLATES[2]!.build(), ['set_plot', { eastWest: "150'", northSouth: "100'" }], ['fit_to_buildable', {}]),
+    ).toThrow(/too different/);
   });
 
   it('needs a plot first', () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, type FormEvent } from 'react';
-import { TEMPLATES, TREE_POSITIONS, buildingOuterRect, formatLength, parseLength, type BuildingModel, type Compass } from '@ds/core';
+import { TEMPLATES, TREE_POSITIONS, buildingOuterRect, chooseLayout, formatLength, parseLength, type BuildingModel, type Compass } from '@ds/core';
 
 const SIDES: Compass[] = ['north', 'south', 'east', 'west'];
 
@@ -26,7 +26,7 @@ function Thumb({ model }: { model: BuildingModel }) {
 export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<string, unknown>) => Promise<void>; busy: boolean }) {
   const models = useMemo(() => Object.fromEntries(TEMPLATES.map((t) => [t.id, t.build()])), []);
   const [name, setName] = useState('');
-  const [template, setTemplate] = useState('3bhk');
+  const [template, setTemplate] = useState('auto');
   const [withPlot, setWithPlot] = useState(true);
   // Default plot: 60' east–west × 40' north–south (edit freely).
   const [ew, setEw] = useState("60'");
@@ -34,7 +34,6 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
   const [setbacks, setSetbacks] = useState<Record<Compass, string>>({ north: '', south: '', east: '', west: '' });
   const [access, setAccess] = useState({ side: 'none', kind: 'passage', width: '' });
   const [trees, setTrees] = useState<TreeRow[]>([]);
-  const [fit, setFit] = useState(true);
   const [error, setError] = useState('');
 
   function len(label: string, v: string, allowEmpty = false): string | null {
@@ -70,11 +69,36 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
           if (t.label.trim()) siteOps.push({ op: 'add_tree', args: { label: t.label.trim(), position: t.position, keep: true } });
         }
       }
-      await onCreate({ name: name.trim() || 'Untitled design', template, siteOps, fit: withPlot && fit });
+      if (!withPlot && template === 'auto') throw new Error('Pick a layout, or enter the plot so one can be chosen for it.');
+      await onCreate({ name: name.trim() || 'Untitled design', template, siteOps });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create the design.');
     }
   };
+
+  /** Plinth (area inside the setbacks) from the current inputs, and the layout best fit would pick. */
+  const plinth = useMemo(() => {
+    if (!withPlot) return null;
+    try {
+      const W = parseLength(ew).mm;
+      const D = parseLength(ns).mm;
+      const sb = (c: Compass) => (setbacks[c].trim() ? parseLength(setbacks[c]).mm : 0);
+      const pw = W - sb('east') - sb('west');
+      const ph = D - sb('north') - sb('south');
+      if (pw <= 0 || ph <= 0) return { text: 'The setbacks leave no room to build.', bad: true };
+      const area = Math.round((pw * ph) / 92903.04);
+      let pick = '';
+      try {
+        const c = chooseLayout(pw, ph);
+        pick = ` → best fit: ${TEMPLATES.find((t) => t.id === c.templateId)!.name}${c.rotated ? ', turned 90°' : ''}`;
+      } catch {
+        pick = ' → too small or large for the standard layouts';
+      }
+      return { text: `Plinth ${formatLength(pw, 'ft-in')} × ${formatLength(ph, 'ft-in')} (${area.toLocaleString('en-IN')} sq ft)${pick}`, bad: false };
+    } catch {
+      return null;
+    }
+  }, [withPlot, ew, ns, setbacks]);
 
   const tplSize = (id: string) => {
     const r = buildingOuterRect(models[id]!);
@@ -90,6 +114,11 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
 
       <div className="nd-label">Start from</div>
       <div className="tpl-grid" role="radiogroup" aria-label="Starting layout">
+        <button type="button" role="radio" aria-checked={template === 'auto'} className={`tpl-card auto ${template === 'auto' ? 'on' : ''}`} onClick={() => setTemplate('auto')}>
+          <span className="tpl-auto-mark" aria-hidden="true">✦</span>
+          <span className="tpl-name">Best fit for this plot</span>
+          <span className="tpl-desc">Picks 1, 2 or 3 BHK from the plinth size and turns it to suit the plot&apos;s shape.</span>
+        </button>
         {TEMPLATES.map((t) => (
           <button
             type="button"
@@ -102,7 +131,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
             <Thumb model={models[t.id]!} />
             <span className="tpl-name">{t.name}</span>
             <span className="tpl-desc">{t.description}</span>
-            <span className="tpl-size">{tplSize(t.id)}</span>
+            <span className="tpl-size">{withPlot ? 'sized to your plinth' : `default ${tplSize(t.id)}`}</span>
           </button>
         ))}
       </div>
@@ -164,9 +193,8 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
           {trees.length < 6 && (
             <button type="button" className="btn-secondary btn-sm" onClick={() => setTrees((ts) => [...ts, { label: '', position: 'north-west corner' }])}>+ Add a tree</button>
           )}
-          <label className="nd-check">
-            <input type="checkbox" checked={fit} onChange={(e) => setFit(e.target.checked)} /> Size the layout to fill the buildable area (inside the setbacks)
-          </label>
+          {plinth && <p className={`nd-plinth ${plinth.bad ? 'bad' : ''}`}>{plinth.text}</p>}
+          <p className="card-desc">The layout is sized to fill the plinth (the area inside the setbacks). You can change rooms and sizes afterwards.</p>
         </div>
       )}
 

@@ -566,7 +566,7 @@ function fitBuilding(model: BuildingModel, outerW: number, outerH: number, ctx: 
   const sx = (outerW - (A.x0 - R.x0) - (R.x1 - A.x1)) / (A.x1 - A.x0);
   const sy = (outerH - (A.y0 - R.y0) - (R.y1 - A.y1)) / (A.y1 - A.y0);
   const u = model.displayUnits;
-  if (!(sx > 0.6 && sx < 1.6 && sy > 0.6 && sy < 1.6)) {
+  if (!(sx >= 0.5 && sx <= 2 && sy >= 0.5 && sy <= 2)) {
     throw new ModelError(
       `The buildable area (${formatLength(outerW, u)} × ${formatLength(outerH, u)}) is too different from this layout (${formatLength(R.x1 - R.x0, u)} × ${formatLength(R.y1 - R.y0, u)}) to stretch it sensibly. Try a template closer in size.`,
     );
@@ -612,6 +612,33 @@ function fitBuilding(model: BuildingModel, outerW: number, outerH: number, ctx: 
     const y = gt <= gb ? after.y0 + gt + h / 2 : after.y1 - gb - h / 2;
     f.at = { x: Math.round(x), y: Math.round(y) };
   }
+
+  // Items that no longer fit their resized room: try turning them, else leave them out.
+  const fits = (f: FurnitureItem, r: Rect) => {
+    const fr = itemFootprint(f);
+    return fr.x1 - fr.x0 <= r.x1 - r.x0 + 1 && fr.y1 - fr.y0 <= r.y1 - r.y0 + 1;
+  };
+  const clampInto = (f: FurnitureItem, r: Rect) => {
+    const fr = itemFootprint(f);
+    const hw = (fr.x1 - fr.x0) / 2;
+    const hh = (fr.y1 - fr.y0) / 2;
+    f.at = { x: Math.round(Math.min(Math.max(f.at.x, r.x0 + hw), r.x1 - hw)), y: Math.round(Math.min(Math.max(f.at.y, r.y0 + hh), r.y1 - hh)) };
+  };
+  model.furniture = model.furniture.filter((f) => {
+    const room = model.rooms.find((r) => r.id === f.roomId);
+    if (!room) return true;
+    const r = roomClearRect(model, room);
+    if (!fits(f, r)) {
+      f.rotation = (f.rotation + 90) % 360;
+      if (!fits(f, r)) {
+        ctx.note(`${f.label} left out: it doesn't fit the resized ${room.name}.`);
+        return false;
+      }
+      ctx.note(`${f.label} turned to fit the resized ${room.name}.`);
+    }
+    clampInto(f, r);
+    return true;
+  });
 }
 
 /**

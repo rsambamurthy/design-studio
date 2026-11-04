@@ -266,8 +266,21 @@ export default function SitePanel({ model, busy, apply, revLabel }: Props) {
                 </select>
               </label>
             </div>
-            <button className="btn-primary btn-sm" disabled={busy}>Place building</button>
-            <p className="card-desc">For finer moves, ask the assistant: “move the building 1 foot east”.</p>
+            <div className="row wrap">
+              <button className="btn-primary btn-sm" disabled={busy}>Place building</button>
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                disabled={busy}
+                onClick={() => {
+                  if (!window.confirm('Resize the whole layout so its outer walls fill the plinth (inside the setbacks)? Rooms scale in proportion; you can undo.')) return;
+                  void run('Fit layout to plinth', [{ op: 'fit_to_buildable', args: {} }]);
+                }}
+              >
+                Fit layout to plinth
+              </button>
+            </div>
+            <p className="card-desc">For finer moves, ask the assistant: “move the building 1 foot east”. After changing the plot or setbacks, use Fit layout to plinth to resize the layout to match.</p>
           </form>
         </>
       )}

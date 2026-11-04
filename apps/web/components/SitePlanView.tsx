@@ -111,6 +111,11 @@ export default function SitePlanView({ model, issues, hot }: { model: BuildingMo
       {/* Plot and setback band */}
       <rect x={0} y={0} width={W} height={D} className="plot-band" />
       <rect x={b.x0} y={b.y0} width={Math.max(b.x1 - b.x0, 0)} height={Math.max(b.y1 - b.y0, 0)} className="buildable" />
+      {b.x1 > b.x0 && b.y1 > b.y0 && (
+        <text x={b.x0 + font * 0.4} y={b.y1 - font * 0.5} fontSize={font * 0.85} className="plinth-label">
+          Plinth limit {formatLength(b.x1 - b.x0, u)} × {formatLength(b.y1 - b.y0, u)}
+        </text>
+      )}
       {site.access.map(accessBand)}
       <rect x={0} y={0} width={W} height={D} className={`plot-line ${hot ? 'hot' : ''}`} />
       {(['top', 'bottom', 'left', 'right'] as PlanSide[]).map(setbackLabel)}
