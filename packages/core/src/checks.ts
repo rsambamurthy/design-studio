@@ -105,6 +105,15 @@ function coreChecks(model: BuildingModel, swings: { o: Opening; rect: Rect }[]):
   for (const c of cores) {
     const fp = coreFootprint(c);
     const room = model.rooms.find((r) => r.id === c.roomId);
+    if (room && room.kind !== c.kind) {
+      out.push({
+        code: 'core.own-room',
+        severity: 'advisory',
+        message: `The ${c.label.toLowerCase()} is inside ${room.name}. A ${c.kind === 'stair' ? 'staircase' : 'lift shaft'} is usually its own enclosed unit: split off a ${c.kind} room for it.`,
+        entityIds: [c.id, room.id],
+        at: c.at,
+      });
+    }
     if (room) {
       const rr = roomClearRect(model, room);
       if (fp.x0 < rr.x0 - OVERLAP_TOL || fp.x1 > rr.x1 + OVERLAP_TOL || fp.y0 < rr.y0 - OVERLAP_TOL || fp.y1 > rr.y1 + OVERLAP_TOL) {

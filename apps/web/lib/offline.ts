@@ -83,6 +83,17 @@ function planOps(model: BuildingModel, s: string): Operation[] {
     return [parseOperation('swap_rooms', { roomA: a.id, roomB: b.id })];
   }
 
+  // "split the lobby on the east side, 6' as lift" / "split bed 3 east 5' as dress"
+  if ((m = s.match(new RegExp(String.raw`^split\s+(?:the\s+)?(.+?)\s+(?:on\s+|from\s+)?(?:the\s+|its\s+)?${DIR}(?:\s+side)?,?\s+(?:by\s+)?${LEN}(?:\s+clear)?,?\s+(?:as|for|into)\s+(?:a\s+|an\s+|the\s+)?(.+)$`)))) {
+    const r = findEntities(model, m[1]!).find((e) => e.type === 'room');
+    if (!r) throw new Error(`Which room is "${m[1]}"?`);
+    const raw = m[4]!.trim();
+    const kinds = ['stair', 'lift', 'toilet', 'kitchen', 'bedroom', 'balcony', 'lobby', 'pooja'] as const;
+    const kind = kinds.find((k) => raw.includes(k)) ?? (/\bbath|wash\b/.test(raw) ? 'toilet' : 'other');
+    const name = raw.replace(/\b\w/g, (c) => c.toUpperCase());
+    return [parseOperation('split_room', { roomId: r.id, side: m[2], size: m[3]!.trim(), name, kind })];
+  }
+
   if ((m = s.match(/^move\s+(?:the\s+)?(.+?)\s+to\s+the\s+(north-west|north-east|south-west|south-east)\s+corner$/))) {
     const r = findEntities(model, m[1]!).find((e) => e.type === 'room');
     if (!r) throw new Error(`Which room is "${m[1]}"?`);

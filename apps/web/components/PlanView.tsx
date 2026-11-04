@@ -146,7 +146,7 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds }: Props & { bo
       {/* Rooms (fills only; labels are drawn last so furniture never hides them) */}
       {model.rooms.map((r) => {
         const c = roomClearRect(model, r);
-        return <rect key={r.id} x={c.x0} y={c.y0} width={c.x1 - c.x0} height={c.y1 - c.y0} className={`room ${r.wet ? 'wet' : ''} ${changedIds.has(r.id) ? 'hot' : ''}`} />;
+        return <rect key={r.id} x={c.x0} y={c.y0} width={c.x1 - c.x0} height={c.y1 - c.y0} className={`room ${r.wet ? 'wet' : ''} ${r.kind === 'stair' || r.kind === 'lift' ? 'core-room' : ''} ${changedIds.has(r.id) ? 'hot' : ''}`} />;
       })}
 
       {/* Walls */}
@@ -326,8 +326,21 @@ function OpeningShape({ model, o, hot, hit = false }: { model: BuildingModel; o:
       </g>
     );
   }
-  const t = wall.thickness / 4;
   const nn = { x: d.y, y: -d.x };
+  if (o.kind === 'opening') {
+    // Plain gap: just the two jamb lines across the wall.
+    const h = wall.thickness / 2;
+    return (
+      <g className={cls}>
+        <title>{`${o.label} · ${formatLength(o.width, model.displayUnits)}`}</title>
+        {gap}
+        {[j0, j1].map((j, k) => (
+          <line key={k} x1={j.x - nn.x * h} y1={j.y - nn.y * h} x2={j.x + nn.x * h} y2={j.y + nn.y * h} className="jamb-line" />
+        ))}
+      </g>
+    );
+  }
+  const t = wall.thickness / 4;
   return (
     <g className={cls}>
       <title>{`${o.label} · ${formatLength(o.width, model.displayUnits)}`}</title>

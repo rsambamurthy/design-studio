@@ -19,11 +19,31 @@ const room = (m: BuildingModel, name: string) => m.rooms.find((r) => r.name === 
 const errors = (m: BuildingModel) => runChecks(m).filter((i) => i.severity === 'error');
 
 describe('stair and lift', () => {
-  it('3BHK template has a stair and a lift in the lobby, with no errors', () => {
+  it('3BHK template has separate Lobby, Stair and Lift units, with no errors', () => {
     const m = TEMPLATES.find((t) => t.id === '3bhk')!.build();
     expect(m.cores!.map((c) => c.kind).sort()).toEqual(['lift', 'stair']);
-    expect(m.cores!.every((c) => c.roomId === 'r-lobby')).toBe(true);
+    for (const c of m.cores!) expect(m.rooms.find((r) => r.id === c.roomId)!.kind).toBe(c.kind);
+    expect(m.rooms.map((r) => r.name)).toEqual(expect.arrayContaining(['Lobby', 'Stair', 'Lift']));
+    expect(m.openings.map((o) => o.label)).toEqual(expect.arrayContaining(['Stair entry', 'Lift door']));
+    expect(m.openings.find((o) => o.label === 'Stair entry')!.kind).toBe('opening');
     expect(errors(m)).toEqual([]);
+    expect(runChecks(m).some((i) => i.code === 'core.own-room')).toBe(false);
+  });
+
+  it('a stair or lift sitting inside an ordinary room is flagged', () => {
+    const m = apply(sampleModel(), 'add_lift', { roomId: 'r-lobby' }).model;
+    const own = runChecks(m).filter((i) => i.code === 'core.own-room');
+    expect(own).toHaveLength(1);
+    expect(own[0]!.message).toMatch(/usually its own enclosed unit/);
+  });
+
+  it('carves the core units to fit narrow and wide plinths', () => {
+    for (const [ew, ns, sb] of [["60'", "40'", "5'"], ["30'", "60'", "3'"], ["40'", "60'", "5'"]] as const) {
+      const { model } = startDesign('auto', [op('set_plot', { eastWest: ew, northSouth: ns }), op('set_setback', { side: 'all', distance: sb })], 'T');
+      expect(model.rooms.some((r) => r.kind === 'stair')).toBe(true);
+      expect(model.rooms.some((r) => r.kind === 'lift')).toBe(true);
+      expect(errors(model)).toEqual([]);
+    }
   });
 
   it('sizes a dog-legged stair from floor height', () => {
@@ -118,13 +138,30 @@ describe('swap and move rooms', () => {
     expect(r.assumptions.join(' ')).toMatch(/wet room moved/);
   });
 
-  it('moves the lobby (with its stair and lift) to the north-east corner', () => {
-    const m = TEMPLATES.find((t) => t.id === '3bhk')!.build();
+  it('moves a room (with its stair) to the north-east corner', () => {
+    const m = apply(sampleModel(), 'add_stair', { roomId: 'r-lobby' }).model;
     const r = apply(m, 'move_room_to', { roomId: 'r-lobby', corner: 'north-east' });
     const lobbyNow = r.model.rooms.find((x) => x.name === 'Lobby · Lift · Stair')!;
     expect(lobbyNow.id).toBe('r-bed3');
     expect(r.model.cores!.every((c) => c.roomId === 'r-bed3')).toBe(true);
     expect(r.summary).toMatch(/Moved Lobby · Lift · Stair to the north-east corner; Bed 3 takes its old place/);
+  });
+
+  it('splits a room with a new wall; the new room takes the named side', () => {
+    const m0 = sampleModel();
+    const before = roomClearRect(m0, room(m0, 'Bed 3'));
+    const r = apply(m0, 'split_room', { roomId: 'r-bed3', side: 'east', size: "5'", name: 'Dress', kind: 'other' });
+    const dress = roomClearRect(r.model, room(r.model, 'Dress'));
+    const bed = roomClearRect(r.model, room(r.model, 'Bed 3'));
+    expect(Math.round(dress.x1 - dress.x0)).toBe(1524);
+    expect(dress.x1).toBe(before.x1);
+    expect(bed.x0).toBe(before.x0);
+    expect(Math.round(bed.x1 - bed.x0)).toBe(Math.round(before.x1 - before.x0 - 1524 - 115));
+    expect(r.summary).toMatch(/Split Bed 3: new Dress on the east side/);
+  });
+
+  it('refuses a split that leaves too little', () => {
+    expect(() => apply(sampleModel(), 'split_room', { roomId: 'r-t1', side: 'east', size: "4'", name: 'X' })).toThrow(/too little/);
   });
 
   it('refuses to swap a room with itself', () => {

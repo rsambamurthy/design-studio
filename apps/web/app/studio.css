@@ -54,6 +54,7 @@
 
 .plan-svg .room { fill: #fff; }
 .plan-svg .room.wet { fill: #eef6ff; }
+.plan-svg .room.core-room { fill: #f4f3fb; }
 .plan-svg .room.hot { fill: #fff4ed; }
 .plan-svg .room-label text { paint-order: stroke; stroke: rgba(255, 255, 255, .85); stroke-width: 60px; stroke-linejoin: round; }
 .plan-svg .room-name { fill: var(--color-text); font-weight: 600; text-anchor: middle; font-family: var(--font); }
@@ -64,6 +65,7 @@
 .plan-svg .door-leaf { stroke: var(--color-text); stroke-width: 40; }
 .plan-svg .door-arc { fill: none; stroke: var(--color-muted); stroke-width: 22; stroke-dasharray: 70 50; }
 .plan-svg .window-line { stroke: #2563eb; stroke-width: 24; }
+.plan-svg .jamb-line { stroke: #1f2937; stroke-width: 30; }
 .plan-svg .opening.hot .door-leaf,
 .plan-svg .opening.hot .door-arc,
 .plan-svg .opening.hot .window-line { stroke: var(--theme-accent); }

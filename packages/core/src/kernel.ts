@@ -11,6 +11,7 @@ import {
   planSideCompass,
   rectSize,
   rectsOverlap,
+  roomAxisRect,
   roomClearRect,
   vectorToCompass,
   wallDir,
@@ -526,6 +527,49 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       break;
     }
 
+    case 'split_room': {
+      const room = getRoom(model, args.roomId);
+      const side = ctx.planSideFor(room, args.side as Compass);
+      const size = ctx.length(args.size);
+      const t = args.wallThickness ? ctx.length(args.wallThickness) : 115;
+      const r = roomClearRect(model, room);
+      const ax = roomAxisRect(model, room);
+      const vertical = side === 'left' || side === 'right';
+      const span = vertical ? r.x1 - r.x0 : r.y1 - r.y0;
+      const u = model.displayUnits;
+      if (size < 600) throw new ModelError(`A room needs to be at least ${formatLength(600, u)} across.`);
+      if (span - size - t < 600) {
+        throw new ModelError(`${room.name} is ${formatLength(span, u)} across; ${formatLength(size, u)} plus the new wall leaves too little for ${room.name}.`);
+      }
+      const axis = Math.round(
+        side === 'left' ? r.x0 + size + t / 2 : side === 'right' ? r.x1 - size - t / 2 : side === 'top' ? r.y0 + size + t / 2 : r.y1 - size - t / 2,
+      );
+      const wall: Wall = vertical
+        ? { id: ctx.newId('w'), a: { x: axis, y: ax.y0 }, b: { x: axis, y: ax.y1 }, thickness: t, kind: 'internal' }
+        : { id: ctx.newId('w'), a: { x: ax.x0, y: axis }, b: { x: ax.x1, y: axis }, thickness: t, kind: 'internal' };
+      model.walls.push(wall);
+      const opposite = { left: 'right', right: 'left', top: 'bottom', bottom: 'top' } as const;
+      const kind = (args.kind ?? 'other') as Room['kind'];
+      const created: Room = {
+        id: ctx.newId('r'),
+        name: args.name,
+        kind,
+        wet: kind === 'toilet' || kind === 'kitchen' || kind === 'service',
+        bounds: { ...room.bounds, [opposite[side]]: wall.id },
+      };
+      room.bounds = { ...room.bounds, [side]: wall.id };
+      model.rooms.push(created);
+      // Furniture, stairs and lifts now in the new room move to it.
+      const nr = roomClearRect(model, created);
+      const inside = (p: Point) => p.x >= nr.x0 - 1 && p.x <= nr.x1 + 1 && p.y >= nr.y0 - 1 && p.y <= nr.y1 + 1;
+      for (const f of model.furniture) if (f.roomId === room.id && inside(f.at)) { f.roomId = created.id; ctx.touch(f.id); }
+      for (const c of coresOf(model)) if (c.roomId === room.id && inside(c.at)) { c.roomId = created.id; ctx.touch(c.id); }
+      ctx.touch(wall.id, room.id, created.id);
+      ctx.summary = `Split ${room.name}: new ${args.name} on the ${args.side} side, ${formatLength(size, u)} clear (${roomSizeText(model, created)}).`;
+      ctx.note(`New ${formatLength(t, u)} wall with no door yet; add a door or opening to reach ${args.name}.`);
+      break;
+    }
+
     case 'rename_room': {
       const room = getRoom(model, args.roomId);
       const before = room.name;
@@ -792,7 +836,7 @@ function fitBuilding(model: BuildingModel, outerW: number, outerH: number, ctx: 
       const rf = coreFootprint(c);
       if (rf.x1 - rf.x0 > after.x1 - after.x0 + 1 || rf.y1 - rf.y0 > after.y1 - after.y0 + 1) {
         c.rotation = (c.rotation + 270) % 360;
-        ctx.note(`The ${c.label.toLowerCase()} no longer fits ${room.name}; it needs a bigger room.`);
+        if (room.kind !== 'stair' && room.kind !== 'lift') ctx.note(`The ${c.label.toLowerCase()} no longer fits ${room.name}; it needs a bigger room.`);
       } else ctx.note(`The ${c.label.toLowerCase()} was turned to fit the resized ${room.name}.`);
     }
     // keep inside the room where possible
@@ -802,6 +846,8 @@ function fitBuilding(model: BuildingModel, outerW: number, outerH: number, ctx: 
     if (hw * 2 <= after.x1 - after.x0) c.at = { ...c.at, x: Math.round(Math.min(Math.max(c.at.x, after.x0 + hw), after.x1 - hw)) };
     if (hh * 2 <= after.y1 - after.y0) c.at = { ...c.at, y: Math.round(Math.min(Math.max(c.at.y, after.y0 + hh), after.y1 - hh)) };
   }
+
+  fitCoreRooms(model, ctx);
 
   // Items that no longer fit their resized room: try turning them, else leave them out.
   const fits = (f: FurnitureItem, r: Rect) => {
@@ -830,6 +876,69 @@ function fitBuilding(model: BuildingModel, outerW: number, outerH: number, ctx: 
     return true;
   });
 }
+
+/**
+ * Stair and lift rooms keep the size their stair or lift needs: when a resize
+ * leaves one too small, an inside wall is moved, taking the space from the
+ * neighbouring ordinary room. The stair or lift is then put back in its corner.
+ */
+function fitCoreRooms(model: BuildingModel, ctx: Ctx) {
+  const isCoreRoom = (r: Room) => r.kind === 'stair' || r.kind === 'lift';
+  for (let pass = 0; pass < 2; pass++) {
+    for (const c of coresOf(model)) {
+      const room = model.rooms.find((r) => r.id === c.roomId);
+      if (!room || !isCoreRoom(room)) continue;
+      const r = roomClearRect(model, room);
+      const fp = coreFootprint(c);
+      // Prefer the stair's present turn; else turn it if the room suits that better.
+      let [needW, needH] = [fp.x1 - fp.x0, fp.y1 - fp.y0];
+      const W = r.x1 - r.x0;
+      const H = r.y1 - r.y0;
+      const deficit = (w: number, h: number) => Math.max(0, w - W) + Math.max(0, h - H);
+      if (deficit(needH, needW) < deficit(needW, needH)) {
+        c.rotation = (c.rotation + 90) % 360;
+        [needW, needH] = [needH, needW];
+      }
+      const grow = (axis: 'x' | 'y', need: number) => {
+        const have = axis === 'x' ? W : H;
+        if (need <= have + 1) return;
+        const sides: PlanSide4[] = axis === 'x' ? ['left', 'right'] : ['top', 'bottom'];
+        const options = sides
+          .map((side) => {
+            const wall = getWall(model, room.bounds[side]);
+            if (wall.kind === 'external') return null;
+            const opp = { left: 'right', right: 'left', top: 'bottom', bottom: 'top' } as const;
+            const neighbours = model.rooms.filter((o) => o.bounds[opp[side]] === wall.id);
+            if (neighbours.length === 0) return null;
+            const spare = Math.min(...neighbours.map((o) => {
+              const nr = roomClearRect(model, o);
+              return (axis === 'x' ? nr.x1 - nr.x0 : nr.y1 - nr.y0) - 900;
+            }));
+            const score = (neighbours.some(isCoreRoom) ? -1e6 : 0) + spare;
+            return { side, wall, spare, score };
+          })
+          .filter((o): o is NonNullable<typeof o> => !!o && o.spare >= need - have)
+          .sort((a, b) => b.score - a.score);
+        const pick = options[0];
+        if (!pick) return;
+        const delta = Math.ceil(need - have);
+        ctx.moveWall(pick.wall, pick.side === 'left' || pick.side === 'top' ? -delta : delta);
+      };
+      grow('x', needW);
+      grow('y', needH);
+      const after = roomClearRect(model, room);
+      if (needW <= after.x1 - after.x0 + 1 && needH <= after.y1 - after.y0 + 1) {
+        // Back into the nearest corner of the resized room.
+        const cx = (after.x0 + after.x1) / 2;
+        const cy = (after.y0 + after.y1) / 2;
+        const x = c.at.x <= cx ? after.x0 + needW / 2 : after.x1 - needW / 2;
+        const y = c.at.y <= cy ? after.y0 + needH / 2 : after.y1 - needH / 2;
+        c.at = { x: Math.round(x), y: Math.round(y) };
+      }
+    }
+  }
+}
+type PlanSide4 = 'top' | 'bottom' | 'left' | 'right';
 
 /**
  * Resize a layout so its outer walls measure outerW × outerH (mm). Returns any

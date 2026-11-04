@@ -22,7 +22,8 @@ export interface Wall {
   kind: WallKind;
 }
 
-export type OpeningKind = 'door' | 'window' | 'sliding';
+/** 'opening' is a plain gap in the wall (archway, stair entry) with no leaf. */
+export type OpeningKind = 'door' | 'window' | 'sliding' | 'opening';
 
 export interface Opening {
   id: string;
@@ -49,6 +50,8 @@ export type RoomKind =
   | 'balcony'
   | 'lobby'
   | 'pooja'
+  | 'stair'
+  | 'lift'
   | 'other';
 
 /**

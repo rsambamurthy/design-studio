@@ -25,7 +25,7 @@ export const OperationSchemas = {
   add_opening: z
     .object({
       wallId: id('wall'),
-      kind: z.enum(['door', 'window', 'sliding']),
+      kind: z.enum(['door', 'window', 'sliding', 'opening']).describe('opening = plain gap with no door leaf (archway, stair entry)'),
       width: distance,
       label: z.string().describe('Short label, e.g. "Bed 3 window"'),
       roomId: id('room the opening serves').optional(),
@@ -51,6 +51,18 @@ export const OperationSchemas = {
   flip_item: z.object({ itemId: id('furniture item') }).describe('Swap the hand of a handed item (e.g. chaise left <-> right).'),
   remove: z.object({ entityId: id('opening, furniture item, stair or lift') }).describe('Remove a door, window, furniture item, stair or lift.'),
   rename_room: z.object({ roomId: id('room'), name: z.string().min(1) }).describe('Rename a room.'),
+  split_room: z
+    .object({
+      roomId: id('room to split'),
+      side: compass.describe('Side of the room the new room takes'),
+      size: distance.describe('Clear size of the new room, measured in from that side'),
+      name: z.string().min(1).describe('Name of the new room, e.g. "Lift", "Stair", "Store"'),
+      kind: z
+        .enum(['bedroom', 'toilet', 'kitchen', 'service', 'living', 'dining', 'balcony', 'lobby', 'pooja', 'stair', 'lift', 'other'])
+        .default('other'),
+      wallThickness: distance.optional().describe('Thickness of the new wall (default 4½")'),
+    })
+    .describe('Split a room in two with a new wall. The new room takes the given side; the rest keeps the old name. Use this to make separate stair, lift, store or toilet units.'),
 
   // ---------- Rooms: swap use / move to a corner ----------
   swap_rooms: z

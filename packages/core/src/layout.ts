@@ -126,7 +126,8 @@ export function startDesign(templateId: string, siteOps: Operation[], name: stri
     const rotated = Math.abs(Math.log(pw / h)) + Math.abs(Math.log(ph / w)) < Math.abs(Math.log(pw / w)) + Math.abs(Math.log(ph / h));
     choice = { templateId: first.id, rotated, reason: `${first.name}${rotated ? ', turned 90°' : ''}` };
   }
-  let layout = getTemplate(choice.templateId)!.build();
+  const template = getTemplate(choice.templateId)!;
+  let layout = template.base ? template.base() : template.build();
   if (choice.rotated) layout = rotateLayout(layout);
   model = { ...layout, name, revision: 1, site: structuredClone(site) };
   notes.push(`Started from ${choice.reason}`);
@@ -134,6 +135,7 @@ export function startDesign(templateId: string, siteOps: Operation[], name: stri
   // 3. Size it to the plinth.
   const fit = parseOperation('fit_to_buildable', {});
   model = applyOperation(model, fit).model;
+  if (template.finish) model = template.finish(model);
   notes.push(`sized to the ${formatLength(pw, 'ft-in')} × ${formatLength(ph, 'ft-in')} plinth`);
   return { model: { ...model, revision: 1 }, ops: [...siteOps, fit], notes };
 }
