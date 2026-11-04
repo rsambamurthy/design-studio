@@ -8,3 +8,4 @@ export * from './history';
 export * from './checks';
 export * from './summary';
 export * from './seed';
+export * from './compare';

@@ -178,3 +178,24 @@ describe('agent surface', () => {
     expect(s.length).toBeLessThan(4000);
   });
 });
+
+describe('diffModels', () => {
+  it('reports changed entities and room size deltas after a wall move', async () => {
+    const { diffModels } = await import('../src');
+    const a = sampleModel();
+    const b = applyOperation(a, op('move_wall', { wallId: 'w-t-bed2', direction: 'east', distance: '8"' })).model;
+    const d = diffModels(a, b);
+    expect(d.changed).toEqual(expect.arrayContaining(['w-t-bed2', 'r-bed2', 'r-t1']));
+    const bed2 = d.rooms.find((r) => r.id === 'r-bed2')!;
+    expect(bed2.after!.w - bed2.before!.w).toBe(-203);
+    expect(d.rooms.find((r) => r.id === 'r-kitchen')).toBeUndefined();
+    expect(d.added).toEqual([]);
+  });
+
+  it('reports added furniture', async () => {
+    const { diffModels } = await import('../src');
+    const a = sampleModel();
+    const b = applyOperation(a, op('place_item', { catalogueId: 'sofa-3', roomId: 'r-living', against: 'west' })).model;
+    expect(diffModels(a, b).added).toHaveLength(1);
+  });
+});

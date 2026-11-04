@@ -2,91 +2,89 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  commit,
+  diffModels,
   formatLength,
-  redo,
   revisionLetter,
   roomClearRect,
   runChecks,
-  sampleModel,
-  startHistory,
-  undo,
-  type History,
+  type BuildingModel,
   type Issue,
 } from '@ds/core';
+import AppShell, { type NavKey } from './AppShell';
 import PlanView from './PlanView';
+import { api, when } from './DesignsHome';
+
+export interface RevisionMeta {
+  number: number;
+  parent: number | null;
+  label: string | null;
+  request: string;
+  summary: string;
+  createdAt: string;
+}
+
+export interface DesignDetail {
+  id: string;
+  name: string;
+  currentRev: number;
+  model: BuildingModel;
+  revisions: RevisionMeta[];
+}
 
 interface ChatEntry {
   role: 'user' | 'ai';
   text: string;
   assumptions?: string[];
-  summaries?: string[];
   newIssues?: Issue[];
+  saved?: number | null;
   options?: string[];
   offline?: boolean;
   error?: boolean;
 }
 
-interface TurnResponse {
-  model: History['current']['model'];
+interface Turn {
   reply: string;
-  ops: History['current']['ops'];
   summaries: string[];
   assumptions: string[];
   changedIds: string[];
   newIssues: Issue[];
   question?: { text: string; options: string[] };
   mode: 'llm' | 'offline';
-  error?: string;
 }
 
-const STORAGE_KEY = 'design-studio:v1';
+interface Share {
+  token: string;
+  revision: number | null;
+  createdAt: string;
+}
+
+type Tab = 'assistant' | 'versions' | 'share';
+
 const EXAMPLES = [
   'Move the Bed 2 door 8 inches east',
   'Add a sofa with chaise on the right in the living room against the west wall',
   'Move the wall between Bed 2 and the kitchen 6" west',
 ];
 
-export default function Studio() {
-  const [history, setHistory] = useState<History>(() => startHistory(sampleModel()));
+export default function Studio({ email, initial }: { email: string; initial: DesignDetail }) {
+  const [design, setDesign] = useState<DesignDetail>(initial);
+  const [tab, setTab] = useState<Tab>('assistant');
   const [log, setLog] = useState<ChatEntry[]>([
-    { role: 'ai', text: 'Hi! Describe a change in your own words, e.g. "move the Bed 2 door 8 inches east". Every change can be undone.' },
+    { role: 'ai', text: `Rev ${revisionLetter(initial.currentRev)} loaded. Describe a change in your own words; every change is saved and can be undone.` },
   ]);
   const [changed, setChanged] = useState<Set<string>>(new Set());
+  const [redo, setRedo] = useState<number[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  const [viewing, setViewing] = useState<{ number: number; model: BuildingModel } | null>(null);
+  const [compare, setCompare] = useState<number[]>([]);
+  const [shares, setShares] = useState<Share[] | null>(null);
+  const [labelEdit, setLabelEdit] = useState<{ n: number; text: string } | null>(null);
+  const [notice, setNotice] = useState('');
   const logRef = useRef<HTMLDivElement>(null);
 
-  // Restore / persist (per-browser convenience only; server storage comes next).
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw) as { history: History; log: ChatEntry[] };
-        if (saved.history?.current?.model?.schema === 1) {
-          setHistory(saved.history);
-          setLog(saved.log ?? []);
-        }
-      }
-    } catch {
-      /* storage unavailable: start fresh */
-    }
-    setLoaded(true);
-  }, []);
-  useEffect(() => {
-    if (!loaded) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ history, log: log.slice(-60) }));
-    } catch {
-      /* ignore */
-    }
-  }, [history, log, loaded]);
-  useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: 'smooth' });
-  }, [log, busy]);
-
-  const model = history.current.model;
+  const model = viewing?.model ?? design.model;
+  const current = design.revisions.find((r) => r.number === design.currentRev);
   const issues = useMemo(() => runChecks(model), [model]);
   const counts = {
     error: issues.filter((i) => i.severity === 'error').length,
@@ -94,87 +92,177 @@ export default function Studio() {
     advisory: issues.filter((i) => i.severity === 'advisory').length,
   };
   const carpetSqFt = useMemo(() => {
-    const mm2 = model.rooms
-      .filter((r) => r.kind !== 'lobby')
-      .reduce((s, r) => {
-        const c = roomClearRect(model, r);
-        return s + (c.x1 - c.x0) * (c.y1 - c.y0);
-      }, 0);
+    const mm2 = model.rooms.filter((r) => r.kind !== 'lobby').reduce((s, r) => {
+      const c = roomClearRect(model, r);
+      return s + (c.x1 - c.x0) * (c.y1 - c.y0);
+    }, 0);
     return Math.round(mm2 / 92903.04);
   }, [model]);
-
   const xs = model.walls.flatMap((w) => [w.a.x, w.b.x]);
   const ys = model.walls.flatMap((w) => [w.a.y, w.b.y]);
   const overall = `${formatLength(Math.max(...xs) - Math.min(...xs), model.displayUnits)} × ${formatLength(Math.max(...ys) - Math.min(...ys), model.displayUnits)}`;
+
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: 'smooth' });
+  }, [log, busy]);
+  useEffect(() => {
+    if (tab === 'share' && shares === null) void loadShares();
+  }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function say(entry: ChatEntry) {
+    setLog((l) => [...l, entry]);
+  }
+
+  function applyDesign(next: DesignDetail) {
+    setChanged(new Set(diffModels(design.model, next.model).changed));
+    setDesign(next);
+    setViewing(null);
+  }
 
   async function send(text: string) {
     const message = text.trim();
     if (!message || busy) return;
     setInput('');
-
-    if (/^(undo|undo that|go back)$/i.test(message)) return doUndo(message);
-    if (/^redo$/i.test(message)) return doRedo(message);
-
-    setLog((l) => [...l, { role: 'user', text: message }]);
+    if (/^(undo|undo that|go back)$/i.test(message)) return void undo(message);
+    if (/^redo$/i.test(message)) return void redoLast(message);
+    say({ role: 'user', text: message });
     setBusy(true);
     try {
-      const recent = [...history.past.slice(-4), history.current].map((r) => r.request).filter((r) => r !== 'Initial design');
-      const res = await fetch('/api/chat', {
+      const r = await api<{ turn: Turn; revision: number | null; design: DesignDetail }>(`/api/designs/${design.id}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, model, recent }),
+        json: { message },
       });
-      const data = (await res.json()) as TurnResponse;
-      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-      if (data.ops.length > 0) {
-        setHistory((h) => commit(h, { request: message, ops: data.ops, summary: data.summaries.join(' '), model: data.model }));
-        setChanged(new Set(data.changedIds));
+      if (r.revision) {
+        setDesign(r.design);
+        setChanged(new Set(r.turn.changedIds));
+        setRedo([]);
+        setViewing(null);
       }
-      setLog((l) => [
-        ...l,
-        {
-          role: 'ai',
-          text: data.reply,
-          summaries: data.ops.length > 0 ? data.summaries : undefined,
-          assumptions: data.assumptions,
-          newIssues: data.newIssues,
-          options: data.question?.options,
-          offline: data.mode === 'offline',
-        },
-      ]);
-    } catch (err) {
-      setLog((l) => [...l, { role: 'ai', text: err instanceof Error ? err.message : 'Something went wrong.', error: true }]);
+      say({
+        role: 'ai',
+        text: r.turn.reply,
+        assumptions: r.turn.assumptions,
+        newIssues: r.revision ? r.turn.newIssues : undefined,
+        saved: r.revision,
+        options: r.turn.question?.options,
+        offline: r.turn.mode === 'offline',
+      });
+    } catch (e) {
+      say({ role: 'ai', text: e instanceof Error ? e.message : 'Something went wrong.', error: true });
     } finally {
       setBusy(false);
     }
   }
 
-  function doUndo(said?: string) {
-    if (history.past.length === 0) {
-      setLog((l) => [...l, ...(said ? [{ role: 'user' as const, text: said }] : []), { role: 'ai', text: 'Nothing to undo.' }]);
-      return;
-    }
-    const undone = history.current;
-    setHistory(undo(history));
-    setChanged(new Set());
-    setLog((l) => [...l, ...(said ? [{ role: 'user' as const, text: said }] : []), { role: 'ai', text: `Undone: ${undone.summary}` }]);
+  async function restore(target: number, kind: 'undo' | 'redo' | 'restore') {
+    const r = await api<{ revision: number | null; design: DesignDetail }>(`/api/designs/${design.id}/restore`, {
+      method: 'POST',
+      json: { revision: target, kind, baseRev: design.currentRev },
+    });
+    applyDesign(r.design);
+    return r;
   }
 
-  function doRedo(said?: string) {
-    if (history.future.length === 0) {
-      setLog((l) => [...l, ...(said ? [{ role: 'user' as const, text: said }] : []), { role: 'ai', text: 'Nothing to redo.' }]);
-      return;
+  async function undo(said?: string) {
+    if (said) say({ role: 'user', text: said });
+    if (!current?.parent || busy) return say({ role: 'ai', text: 'Nothing to undo.' });
+    setBusy(true);
+    try {
+      const undone = design.currentRev;
+      const r = await restore(current.parent, 'undo');
+      setRedo((s) => [...s, undone]);
+      say({ role: 'ai', text: r.design.revisions[0]?.summary ?? 'Undone.', saved: r.revision });
+    } catch (e) {
+      say({ role: 'ai', text: e instanceof Error ? e.message : 'Undo failed.', error: true });
+    } finally {
+      setBusy(false);
     }
-    const next = history.future[0]!;
-    setHistory(redo(history));
-    setLog((l) => [...l, ...(said ? [{ role: 'user' as const, text: said }] : []), { role: 'ai', text: `Redone: ${next.summary}` }]);
   }
 
-  function reset() {
-    setHistory(startHistory(sampleModel()));
-    setChanged(new Set());
-    setLog([{ role: 'ai', text: 'Started a fresh copy of the sample design.' }]);
+  async function redoLast(said?: string) {
+    if (said) say({ role: 'user', text: said });
+    const target = redo[redo.length - 1];
+    if (!target || busy) return say({ role: 'ai', text: 'Nothing to redo.' });
+    setBusy(true);
+    try {
+      const r = await restore(target, 'redo');
+      setRedo((s) => s.slice(0, -1));
+      say({ role: 'ai', text: r.design.revisions[0]?.summary ?? 'Redone.', saved: r.revision });
+    } catch (e) {
+      say({ role: 'ai', text: e instanceof Error ? e.message : 'Redo failed.', error: true });
+    } finally {
+      setBusy(false);
+    }
   }
+
+  async function view(n: number) {
+    if (n === design.currentRev) return setViewing(null);
+    setBusy(true);
+    try {
+      const r = await api<{ model: BuildingModel }>(`/api/designs/${design.id}/revisions/${n}`);
+      setViewing({ number: n, model: r.model });
+      setChanged(new Set());
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : 'Could not load that revision.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restoreViewed() {
+    if (!viewing || busy) return;
+    setBusy(true);
+    try {
+      const r = await restore(viewing.number, 'restore');
+      setRedo([]);
+      say({ role: 'ai', text: `Restored Rev ${revisionLetter(viewing.number)} as Rev ${revisionLetter(r.revision ?? design.currentRev)}.`, saved: r.revision });
+      setTab('assistant');
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : 'Restore failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveLabel(n: number, text: string) {
+    try {
+      await api(`/api/designs/${design.id}/revisions/${n}`, { method: 'POST', json: { label: text } });
+      setDesign((d) => ({ ...d, revisions: d.revisions.map((r) => (r.number === n ? { ...r, label: text.trim() || null } : r)) }));
+      setLabelEdit(null);
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : 'Could not save the name.');
+    }
+  }
+
+  async function loadShares() {
+    try {
+      setShares((await api<{ shares: Share[] }>(`/api/designs/${design.id}/shares`)).shares);
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : 'Could not load share links.');
+    }
+  }
+
+  async function newShare(pinned: boolean) {
+    setBusy(true);
+    try {
+      await api(`/api/designs/${design.id}/shares`, { method: 'POST', json: { revision: pinned ? design.currentRev : null } });
+      await loadShares();
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : 'Could not create the link.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(token: string) {
+    if (!window.confirm('Stop this link from working? Anyone you sent it to will lose access.')) return;
+    await api(`/api/designs/${design.id}/shares?token=${encodeURIComponent(token)}`, { method: 'DELETE' }).catch(() => undefined);
+    await loadShares();
+  }
+
+  const shareUrl = (t: string) => `${typeof window === 'undefined' ? '' : window.location.origin}/s/${t}`;
+  const onNav = (k: NavKey) => setTab(k === 'versions' ? 'versions' : k === 'share' ? 'share' : 'assistant');
+  const navActive: NavKey = tab === 'versions' ? 'versions' : tab === 'share' ? 'share' : 'studio';
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -182,56 +270,38 @@ export default function Studio() {
   };
 
   return (
-    <div className="sa-shell">
-      <header className="sa-header">
-        <div className="sa-logo">Integrata</div>
-        <div className="sa-search hide-sm"><input placeholder="Search designs..." aria-label="Search designs" /></div>
-        <div className="sa-assoc-chip">🏢 {model.name}</div>
-        <div className="sa-header-spacer" />
-        <div className="sa-user hide-sm">
-          <div className="sa-avatar">DS</div>
-          <div>
-            <div className="sa-user-name">Design Studio</div>
-            <div className="sa-user-role">Preview</div>
+    <AppShell email={email} chip={design.name} active={navActive} designId={design.id} onNav={onNav}>
+      <h1>{design.name}</h1>
+      <p className="sa-subtitle">
+        {model.levelName} · Rev {revisionLetter(viewing?.number ?? design.currentRev)}
+        {current?.label && !viewing ? ` (${current.label})` : ''} · {overall} · north is {model.northAngle === 0 ? 'up' : `${model.northAngle}° from up`}
+      </p>
+      {notice && (
+        <p className="form-error" role="alert">
+          {notice} <button className="linkish" onClick={() => setNotice('')}>dismiss</button>
+        </p>
+      )}
+
+      <div className="workspace">
+        <section className="card side-card" aria-label="Assistant, versions and sharing">
+          <div className="tabs side-tabs" role="tablist">
+            {(['assistant', 'versions', 'share'] as Tab[]).map((t) => (
+              <button key={t} role="tab" aria-selected={tab === t} className={`tab ${tab === t ? 'on' : ''}`} onClick={() => setTab(t)}>
+                {t === 'assistant' ? 'Assistant' : t === 'versions' ? `Versions (${design.revisions.length})` : 'Share'}
+              </button>
+            ))}
           </div>
-        </div>
-      </header>
 
-      <div className="sa-body">
-        <aside className="sa-sidebar">
-          <div className="sa-sb-head">Navigation</div>
-          <a className="sa-sb-single active">⌂ Design Studio</a>
-          {['Plot & Setbacks', 'Floor Plans', 'Elevations & 3D', 'Schedules', 'BOQ & Cost', 'Catalogue', 'Versions', 'Rule Checks'].map((label) => (
-            <div key={label} className="sa-mg disabled" title="Coming in a later slice">
-              <span className="sa-mg-ic">{label[0]}</span>
-              {label}
-              <span className="sa-mg-chev">soon</span>
-            </div>
-          ))}
-        </aside>
-
-        <main className="sa-main">
-          <h1>{model.name}</h1>
-          <p className="sa-subtitle">
-            {model.levelName} · Rev {revisionLetter(history.past.length + 1)} · {overall} · north is {model.northAngle === 0 ? 'up' : `${model.northAngle}° from up`}
-          </p>
-
-          <div className="workspace">
-            <section className="card chat" aria-label="Design assistant">
-              <div className="card-title">Design assistant</div>
+          {tab === 'assistant' && (
+            <div className="chat">
               <div className="chat-log" ref={logRef}>
                 {log.map((m, i) => (
                   <div key={i} className={`msg ${m.role} ${m.error ? 'error' : ''}`}>
                     {m.text}
-                    {m.assumptions && m.assumptions.length > 0 && (
-                      <span className="assume">Assumed: {m.assumptions.join(' ')}</span>
-                    )}
-                    {m.newIssues && m.newIssues.length > 0 && (
-                      <span className="delta warn">{m.newIssues.map((x) => `⚠ ${x.message}`).join(' ')}</span>
-                    )}
-                    {m.summaries && m.summaries.length > 0 && m.newIssues?.length === 0 && (
-                      <span className="delta">✓ All checks still pass</span>
-                    )}
+                    {m.assumptions && m.assumptions.length > 0 && <span className="assume">Assumed: {m.assumptions.join(' ')}</span>}
+                    {m.newIssues && m.newIssues.length > 0 && <span className="delta warn">{m.newIssues.map((x) => `⚠ ${x.message}`).join(' ')}</span>}
+                    {m.saved && m.newIssues?.length === 0 && <span className="delta">✓ All checks still pass</span>}
+                    {m.saved && <span className="mode">Saved as Rev {revisionLetter(m.saved)}</span>}
                     {m.options && (
                       <span className="options">
                         {m.options.map((o) => (
@@ -244,7 +314,7 @@ export default function Studio() {
                 ))}
                 {busy && <div className="msg ai typing">Working…</div>}
               </div>
-              {log.length <= 2 && (
+              {log.length <= 1 && design.revisions.length <= 1 && (
                 <div className="examples">
                   {EXAMPLES.map((e) => (
                     <button key={e} className="btn-secondary example" onClick={() => void send(e)} disabled={busy}>{e}</button>
@@ -252,49 +322,131 @@ export default function Studio() {
                 </div>
               )}
               <form className="chat-input" onSubmit={onSubmit}>
-                <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Describe a change…" aria-label="Describe a change" disabled={busy} />
-                <button className="btn-primary" type="submit" disabled={busy || !input.trim()}>Send</button>
+                <input value={input} onChange={(e) => setInput(e.target.value)} placeholder={viewing ? 'Back to current to edit…' : 'Describe a change…'} aria-label="Describe a change" disabled={busy || !!viewing} />
+                <button className="btn-primary" type="submit" disabled={busy || !input.trim() || !!viewing}>Send</button>
               </form>
-            </section>
+            </div>
+          )}
 
-            <section className="card plan-card" aria-label="Plan">
-              <div className="canvas-head">
-                <div className="tabs">
-                  <span className="tab on">Plan</span>
-                  <span className="tab off" title="Coming soon">Elevation</span>
-                  <span className="tab off" title="Coming soon">3D</span>
-                  <span className="tab off" title="Coming soon">Schedules</span>
-                </div>
-                <div className="history-btns">
-                  <button className="btn-secondary" onClick={() => doUndo()} disabled={history.past.length === 0 || busy}>↶ Undo</button>
-                  <button className="btn-secondary" onClick={() => doRedo()} disabled={history.future.length === 0 || busy}>↷ Redo</button>
-                </div>
+          {tab === 'versions' && (
+            <div className="versions">
+              <p className="card-desc">Tap a revision to view it. Tick two to compare.</p>
+              {compare.length === 2 && (
+                <a className="btn-primary btn-sm compare-go" href={`/d/${design.id}/compare?a=${Math.min(...compare)}&b=${Math.max(...compare)}`}>
+                  Compare Rev {revisionLetter(Math.min(...compare))} ↔ Rev {revisionLetter(Math.max(...compare))}
+                </a>
+              )}
+              <ul className="rev-list">
+                {design.revisions.map((r) => {
+                  const isCurrent = r.number === design.currentRev;
+                  const isViewing = viewing?.number === r.number || (!viewing && isCurrent);
+                  return (
+                    <li key={r.number} className={`rev ${isViewing ? 'on' : ''}`}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select Rev ${revisionLetter(r.number)} to compare`}
+                        checked={compare.includes(r.number)}
+                        onChange={(e) => setCompare((c) => (e.target.checked ? [...c, r.number].slice(-2) : c.filter((x) => x !== r.number)))}
+                      />
+                      <button className="rev-main" onClick={() => void view(r.number)} disabled={busy}>
+                        <span className="rev-head">
+                          <b>Rev {revisionLetter(r.number)}</b>
+                          {r.label && <span className="badge badge-purple">{r.label}</span>}
+                          {isCurrent && <span className="badge badge-green">current</span>}
+                        </span>
+                        <span className="rev-sum">{r.summary}</span>
+                        <span className="rev-when">{when(r.createdAt)}</span>
+                      </button>
+                      {labelEdit?.n === r.number ? (
+                        <form className="row rev-label" onSubmit={(e) => { e.preventDefault(); void saveLabel(r.number, labelEdit.text); }}>
+                          <input value={labelEdit.text} onChange={(e) => setLabelEdit({ n: r.number, text: e.target.value })} placeholder="e.g. Option 2" maxLength={60} autoFocus aria-label="Revision name" />
+                          <button className="btn-primary btn-sm">Save</button>
+                        </form>
+                      ) : (
+                        <button className="linkish rev-name-btn" onClick={() => setLabelEdit({ n: r.number, text: r.label ?? '' })}>{r.label ? 'Rename' : 'Name it'}</button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+
+          {tab === 'share' && (
+            <div className="share">
+              <p className="card-desc">View-only links: anyone with the link can see the plan, not edit it. They open fine inside WhatsApp.</p>
+              <div className="row wrap">
+                <button className="btn-primary btn-sm" onClick={() => void newShare(false)} disabled={busy}>New link (always latest)</button>
+                <button className="btn-secondary btn-sm" onClick={() => void newShare(true)} disabled={busy}>New link (Rev {revisionLetter(design.currentRev)} only)</button>
               </div>
-              <PlanView model={model} changedIds={changed} issues={issues} />
-              <div className="checks">
-                <span className={`badge ${counts.error ? 'badge-red' : 'badge-green'}`}>{plural(counts.error, 'error')}</span>
-                <span className={`badge ${counts.warning ? 'badge-yellow' : 'badge-green'}`}>{plural(counts.warning, 'warning')}</span>
-                <span className="badge badge-gray">{plural(counts.advisory, 'advisory', 'advisories')}</span>
-                <span className="badge badge-purple">Advisory only · needs professional sign-off</span>
-              </div>
-              {issues.length > 0 && (
-                <ul className="issue-list">
-                  {issues.map((i, k) => (
-                    <li key={k} className={i.severity}>{i.message}</li>
+              {shares === null ? (
+                <p className="card-desc">Loading…</p>
+              ) : shares.length === 0 ? (
+                <p className="card-desc">No links yet.</p>
+              ) : (
+                <ul className="share-list">
+                  {shares.map((s) => (
+                    <li key={s.token}>
+                      <div className="share-what">{s.revision ? `Rev ${revisionLetter(s.revision)} only` : 'Always latest'} · {when(s.createdAt)}</div>
+                      <input readOnly value={shareUrl(s.token)} onFocus={(e) => e.currentTarget.select()} aria-label="Share link" />
+                      <div className="row wrap">
+                        <button className="btn-secondary btn-sm" onClick={() => void navigator.clipboard?.writeText(shareUrl(s.token)).then(() => setNotice('Link copied.'))}>Copy</button>
+                        <a className="btn-secondary btn-sm" href={`https://wa.me/?text=${encodeURIComponent(`${design.name}: ${shareUrl(s.token)}`)}`} target="_blank" rel="noreferrer">WhatsApp</a>
+                        <button className="btn-secondary btn-sm danger-text" onClick={() => void revoke(s.token)}>Stop link</button>
+                      </div>
+                    </li>
                   ))}
                 </ul>
               )}
-            </section>
-          </div>
+            </div>
+          )}
+        </section>
 
-          <div className="stats">
-            <div className="card stat-card"><div className="value">{carpetSqFt.toLocaleString('en-IN')} sq ft</div><div className="label">Carpet area (clear, excl. lobby)</div></div>
-            <div className="card stat-card"><div className="value">{history.past.length}</div><div className="label">Revisions this session · <button className="linkish" onClick={reset}>reset sample</button></div></div>
-            <div className="card stat-card"><div className="value">{model.furniture.length}</div><div className="label">Furniture items placed</div></div>
+        <section className="card plan-card" aria-label="Plan">
+          <div className="canvas-head">
+            <div className="tabs">
+              <span className="tab on">Plan</span>
+              <span className="tab off" title="Coming soon">Elevation</span>
+              <span className="tab off" title="Coming soon">3D</span>
+            </div>
+            <div className="history-btns">
+              {viewing ? (
+                <>
+                  <button className="btn-secondary" onClick={() => setViewing(null)} disabled={busy}>Back to current</button>
+                  <button className="btn-primary" onClick={() => void restoreViewed()} disabled={busy}>Restore Rev {revisionLetter(viewing.number)}</button>
+                </>
+              ) : (
+                <>
+                  <button className="btn-secondary" onClick={() => void undo()} disabled={!current?.parent || busy}>↶ Undo</button>
+                  <button className="btn-secondary" onClick={() => void redoLast()} disabled={redo.length === 0 || busy}>↷ Redo</button>
+                </>
+              )}
+            </div>
           </div>
-        </main>
+          {viewing && <p className="viewing-banner">Viewing Rev {revisionLetter(viewing.number)} (read-only)</p>}
+          <PlanView model={model} changedIds={changed} issues={issues} />
+          <div className="checks">
+            <span className={`badge ${counts.error ? 'badge-red' : 'badge-green'}`}>{plural(counts.error, 'error')}</span>
+            <span className={`badge ${counts.warning ? 'badge-yellow' : 'badge-green'}`}>{plural(counts.warning, 'warning')}</span>
+            <span className="badge badge-gray">{plural(counts.advisory, 'advisory', 'advisories')}</span>
+            <span className="badge badge-purple">Advisory only · needs professional sign-off</span>
+          </div>
+          {issues.length > 0 && (
+            <ul className="issue-list">
+              {issues.map((i, k) => (
+                <li key={k} className={i.severity}>{i.message}</li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
-    </div>
+
+      <div className="stats">
+        <div className="card stat-card"><div className="value">{carpetSqFt.toLocaleString('en-IN')} sq ft</div><div className="label">Carpet area (clear, excl. lobby)</div></div>
+        <div className="card stat-card"><div className="value">Rev {revisionLetter(design.currentRev)}</div><div className="label">{design.revisions.length} saved revisions</div></div>
+        <div className="card stat-card"><div className="value">{model.furniture.length}</div><div className="label">Furniture items placed</div></div>
+      </div>
+    </AppShell>
   );
 }
 
