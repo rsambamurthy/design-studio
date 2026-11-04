@@ -47,7 +47,8 @@ import {
   type TreePosition,
 } from './site';
 import { parseOperation as parseOp, type Operation } from './ops';
-import { coincidentSides, resizeBlockSide, setBlockClearSize, snapBlock, splitBlock, translateBlock } from './blocks';
+import { doorSwingRect } from './checks';
+import { clampBlockInside, coincidentSides, resizeBlockSide, rotateBlock, setBlockClearSize, shellAxisRect, snapBlock, splitBlock, translateBlock } from './blocks';
 import { fitOutRoom } from './fixtures';
 import { CORNERS, DEFAULT_FLOOR_HEIGHT, LIFT_SHAFTS, coreFootprint, coresOf, enclosureOf, placeInCorner, settleCore, sizeStair, type Corner } from './cores';
 import { formatLength, parseLength } from './units';
@@ -515,6 +516,21 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       const v = compassVector(args.direction, model.northAngle);
       const from = c.roomId;
       c.at = { x: Math.round(c.at.x + v.x * d), y: Math.round(c.at.y + v.y * d) };
+      {
+        // Never outside the building.
+        const sh = shellAxisRect(model);
+        const ext = model.walls.find((w) => w.kind === 'external')?.thickness ?? 230;
+        const fp = coreFootprint(c);
+        const t = c.enclosure?.thickness ?? 0;
+        const lo = { x: sh.x0 + ext / 2 + t, y: sh.y0 + ext / 2 + t };
+        const hi = { x: sh.x1 - ext / 2 - t, y: sh.y1 - ext / 2 - t };
+        const dx = fp.x0 < lo.x ? lo.x - fp.x0 : fp.x1 > hi.x ? hi.x - fp.x1 : 0;
+        const dy = fp.y0 < lo.y ? lo.y - fp.y0 : fp.y1 > hi.y ? hi.y - fp.y1 : 0;
+        if (dx || dy) {
+          c.at = { x: Math.round(c.at.x + dx), y: Math.round(c.at.y + dy) };
+          ctx.note('Stopped at the outer wall.');
+        }
+      }
       settleCore(model, c);
       ctx.touch(c.id, c.roomId, from);
       const into = c.roomId !== from ? ` into ${getRoom(model, c.roomId).name}` : '';
@@ -617,7 +633,10 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       const d = ctx.length(args.distance);
       const v = compassVector(args.direction, model.northAngle);
       translateBlock(model, room, Math.round(v.x * d), Math.round(v.y * d));
+      const clamped = clampBlockInside(model, room);
       const snapped = snapBlock(model, room);
+      if (clamped.dx || clamped.dy) ctx.note(`Stopped at the outer wall.`);
+      rehomeDoors(model, room, ctx);
       for (const f of model.furniture) if (f.roomId === room.id) ctx.touch(f.id);
       for (const c of coresOf(model)) if (c.roomId === room.id) ctx.touch(c.id);
       ctx.touch(room.id);
@@ -646,11 +665,248 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       break;
     }
 
+    case 'set_room_position': {
+      const room = getRoom(model, args.roomId);
+      if (!room.block) throw new ModelError(`${room.name} is fixed by walls; it can't be moved.`);
+      const b = room.block;
+      const dx = Math.round(args.x - b.x0);
+      const dy = Math.round(args.y - b.y0);
+      translateBlock(model, room, dx, dy);
+      const pulled = clampBlockInside(model, room);
+      rehomeDoors(model, room, ctx);
+      const fx = dx + Math.round(pulled.dx);
+      const fy = dy + Math.round(pulled.dy);
+      for (const f of model.furniture) if (f.roomId === room.id) ctx.touch(f.id);
+      for (const c of coresOf(model)) if (c.roomId === room.id) ctx.touch(c.id);
+      ctx.touch(room.id);
+      const words: string[] = [];
+      const u = model.displayUnits;
+      const say = (d: number, plan: { x: number; y: number }) => {
+        if (Math.abs(d) < 1) return;
+        words.push(`${formatLength(Math.abs(d), u)} ${vectorToCompass({ x: plan.x * Math.sign(d), y: plan.y * Math.sign(d) }, model.northAngle)}`);
+      };
+      say(fx, { x: 1, y: 0 });
+      say(fy, { x: 0, y: 1 });
+      ctx.summary = words.length ? `Moved ${room.name} ${words.join(' and ')}.` : `${room.name} stays where it is.`;
+      break;
+    }
+
+    case 'rotate_room': {
+      const room = getRoom(model, args.roomId);
+      if (!room.block) throw new ModelError(`${room.name} is fixed by walls; it can't be turned.`);
+      const turns = args.degrees === '180' ? 2 : args.degrees === '-90' ? 3 : 1;
+      const was = roomClearRect(model, room);
+      for (let i = 0; i < turns; i++) rotateBlock(model, room);
+      clampBlockInside(model, room);
+      snapBlock(model, room);
+      // Keep the clear size exactly (just turned), whatever walls it now sits against.
+      const [cw, ch] = turns % 2 ? [was.y1 - was.y0, was.x1 - was.x0] : [was.x1 - was.x0, was.y1 - was.y0];
+      setBlockClearSize(model, room, Math.round(cw), Math.round(ch));
+      rehomeDoors(model, room, ctx);
+      for (const f of model.furniture) if (f.roomId === room.id) ctx.touch(f.id);
+      for (const c of coresOf(model)) if (c.roomId === room.id) ctx.touch(c.id);
+      ctx.touch(room.id);
+      ctx.summary = `Turned ${room.name} ${args.degrees}°; it is now ${roomSizeText(model, room)}.`;
+      break;
+    }
+
+    case 'place_room_against': {
+      const room = getRoom(model, args.roomId);
+      if (!room.block) throw new ModelError(`${room.name} is fixed by walls; it can't be moved.`);
+      const b = room.block;
+      const side = compassToSide(args.side as Compass, model.northAngle);
+      const outer = args.targetId === 'outer';
+      const target = outer ? undefined : getRoom(model, args.targetId);
+      if (target && !target.block) throw new ModelError(`${target.name} is open space; put the room against an outer wall or another room instead.`);
+      const t = target ? target.block! : shellAxisRect(model);
+      const w = b.x1 - b.x0;
+      const h = b.y1 - b.y0;
+      let x0 = b.x0;
+      let y0 = b.y0;
+      // Across: share the target's wall line on that side (inside the outer walls for "outer").
+      if (outer) {
+        if (side === 'top') y0 = t.y0;
+        if (side === 'bottom') y0 = t.y1 - h;
+        if (side === 'left') x0 = t.x0;
+        if (side === 'right') x0 = t.x1 - w;
+      } else {
+        if (side === 'top') y0 = t.y0 - h;
+        if (side === 'bottom') y0 = t.y1;
+        if (side === 'left') x0 = t.x0 - w;
+        if (side === 'right') x0 = t.x1;
+      }
+      // Along: line up an edge, centre, or keep.
+      if (args.align && args.align !== 'keep') {
+        const horizontalWall = side === 'top' || side === 'bottom';
+        if (args.align === 'centre') {
+          if (horizontalWall) x0 = Math.round((t.x0 + t.x1) / 2 - w / 2);
+          else y0 = Math.round((t.y0 + t.y1) / 2 - h / 2);
+        } else {
+          const edge = compassToSide(args.align as Compass, model.northAngle);
+          if (edge === 'left') x0 = t.x0;
+          if (edge === 'right') x0 = t.x1 - w;
+          if (edge === 'top') y0 = t.y0;
+          if (edge === 'bottom') y0 = t.y1 - h;
+        }
+      }
+      translateBlock(model, room, Math.round(x0 - b.x0), Math.round(y0 - b.y0));
+      const clamped = clampBlockInside(model, room);
+      rehomeDoors(model, room, ctx);
+      for (const f of model.furniture) if (f.roomId === room.id) ctx.touch(f.id);
+      for (const c of coresOf(model)) if (c.roomId === room.id) ctx.touch(c.id);
+      ctx.touch(room.id);
+      const where = outer ? `against the ${args.side} outer wall` : `against ${target!.name}'s ${args.side} wall`;
+      ctx.summary = `Moved ${room.name} ${where}${args.align && args.align !== 'keep' ? `, lined up ${args.align === 'centre' ? 'on its centre' : `on the ${args.align}`}` : ''}.`;
+      if (clamped.dx || clamped.dy) ctx.note('It would have stuck out of the building, so it stops at the outer wall.');
+      break;
+    }
+
+    case 'add_door_between': {
+      const a = getRoom(model, args.roomA);
+      const b = getRoom(model, args.roomB);
+      const area = (r: Room) => {
+        const c = roomClearRect(model, r);
+        return (c.x1 - c.x0) * (c.y1 - c.y0);
+      };
+      const openA = !a.block && model.rooms.some((x) => x.block);
+      const openB = !b.block && model.rooms.some((x) => x.block);
+      // The room the door belongs to (and opens into): the smaller private room.
+      const [own, other] = openA ? [b, a] : openB ? [a, b] : area(a) <= area(b) ? [a, b] : [b, a];
+      let wallId: string | undefined;
+      let span: [number, number] | undefined;
+      if (!other.block || !own.block) {
+        // Into the open space: a free side of the block.
+        const blk = own.block ? own : other;
+        const free = SIDES4.filter((sd) => !fixedWallUnder(model, blk, sd) && coincidentSides(model, blk, sd).length === 0);
+        const r = roomClearRect(model, blk);
+        const len = (sd: PlanSide4) => (sd === 'top' || sd === 'bottom' ? r.x1 - r.x0 : r.y1 - r.y0);
+        const sd = [...free].sort((x, y) => len(y) - len(x))[0];
+        if (!sd) throw new ModelError(`${blk.name} has no side open to ${(blk === own ? other : own).name}.`);
+        wallId = blk.bounds[sd];
+      } else {
+        const sd = SIDES4.find((x) => coincidentSides(model, own, x).some((c) => c.room.id === other.id));
+        if (!sd) throw new ModelError(`${a.name} and ${b.name} don't share a wall. Put one against the other first.`);
+        wallId = own.bounds[sd];
+        // Centre on the part of the wall both rooms share.
+        const ra = roomClearRect(model, own);
+        const rb = roomClearRect(model, other);
+        const horizontal = sd === 'top' || sd === 'bottom';
+        span = horizontal ? [Math.max(ra.x0, rb.x0), Math.min(ra.x1, rb.x1)] : [Math.max(ra.y0, rb.y0), Math.min(ra.y1, rb.y1)];
+      }
+      const wall = getWall(model, wallId);
+      const width = args.width ? ctx.length(args.width) : own.kind === 'toilet' || other.kind === 'toilet' ? 762 : 914;
+      const d = wallDir(wall);
+      const along = (v: number) => (isHorizontal(wall) ? (v - wall.a.x) * Math.sign(d.x) : (v - wall.a.y) * Math.sign(d.y));
+      const offset = span ? Math.round(along((span[0] + span[1]) / 2)) : Math.round(wallLength(wall) / 2);
+      if (span && span[1] - span[0] < width + 2 * JAMB_MIN) throw new ModelError(`${a.name} and ${b.name} share only ${formatLength(Math.max(0, span[1] - span[0]), model.displayUnits)} of wall; not enough for a door.`);
+      ctx.checkOpeningFits(wall, offset, width, `${own.name} door`);
+      const o: Opening = {
+        id: ctx.newId('door'),
+        label: `${own.name} door${own.block && other.block ? ` from ${other.name}` : ''}`,
+        wallId,
+        kind: args.kind ?? 'door',
+        offset,
+        width,
+        height: 2100,
+        swingSide: 'left',
+        hinge: 'start',
+      };
+      model.openings.push(o);
+      setSwingInto(model, o, own);
+      // Slide it along the shared wall (and try the other hinge) to keep the swing clear of fixtures and furniture.
+      {
+        const clear = () => {
+          const sw = doorSwingRect(model, o);
+          return model.furniture.every((f) => !rectsOverlap(sw, itemFootprint(f), 5));
+        };
+        if (!clear()) {
+          const lo = span ? along(span[0]) + width / 2 + JAMB_MIN : JAMB_MIN + width / 2;
+          const hi = span ? along(span[1]) - width / 2 - JAMB_MIN : wallLength(wall) - JAMB_MIN - width / 2;
+          const tries: number[] = [];
+          for (let k = 1; k * 75 <= Math.abs(hi - lo) + 75; k++) tries.push(offset - k * 75, offset + k * 75);
+          let found = false;
+          for (const at of tries) {
+            if (at < Math.min(lo, hi) || at > Math.max(lo, hi)) continue;
+            for (const hinge of ['start', 'end'] as const) {
+              o.offset = Math.round(at);
+              o.hinge = hinge;
+              if (clear()) {
+                found = true;
+                break;
+              }
+            }
+            if (found) break;
+          }
+          if (!found) {
+            o.offset = offset;
+            o.hinge = 'start';
+            // Fixtures may be laid out again below.
+          }
+        }
+      }
+      // A toilet now reached from a bedroom no longer needs its door to the open living area.
+      let droppedLiving = false;
+      if (own.kind === 'toilet' && other.kind === 'bedroom') {
+        const dropped = model.openings.filter((x) => x.id !== o.id && x.kind === 'door' && parseBlockWallId(x.wallId)?.roomId === own.id && !SIDES4.some((sd) => x.wallId === own.bounds[sd] && coincidentSides(model, own, sd).length > 0));
+        if (dropped.length) {
+          model.openings = model.openings.filter((x) => !dropped.includes(x));
+          ctx.note(`Removed ${own.name}'s door to the living area, since it is now attached to ${other.name}. Undo to keep both.`);
+          droppedLiving = true;
+        }
+      }
+      // Still clashing: lay the toilet or kitchen fixtures out again around the new door.
+      {
+        const sw = doorSwingRect(model, o);
+        const clash = model.furniture.some((f) => f.roomId === own.id && rectsOverlap(sw, itemFootprint(f), 5));
+        const fixtures = model.furniture.filter((f) => f.roomId === own.id && getCatalogueItem(f.catalogueId)?.category === 'sanitary');
+        if (clash && fixtures.length) {
+          model.furniture = model.furniture.filter((f) => !fixtures.includes(f));
+          const placed = fitOutRoom(model, own);
+          if (placed.length) {
+            placed.forEach((f) => ctx.touch(f.id));
+            ctx.note(`Rearranged the fixtures in ${own.name} to clear the new door.`);
+          } else {
+            model.furniture.push(...fixtures);
+          }
+        }
+      }
+      void droppedLiving;
+      ctx.touch(o.id, own.id, other.id);
+      ctx.summary = `Added a ${formatLength(width, model.displayUnits)} door between ${a.name} and ${b.name}, opening into ${own.name}.`;
+      break;
+    }
+
+    case 'edit_door': {
+      const o = ctx.opening(args.openingId);
+      const bits: string[] = [];
+      if (args.opensInto) {
+        const r = getRoom(model, args.opensInto);
+        setSwingInto(model, o, r);
+        bits.push(`opens into ${r.name}`);
+      }
+      if (args.flipHinge) {
+        o.hinge = o.hinge === 'start' ? 'end' : 'start';
+        bits.push('hinged on the other side');
+      }
+      if (args.width) {
+        const w = ctx.length(args.width);
+        ctx.checkOpeningFits(getWall(model, o.wallId), o.offset, w, o.label);
+        o.width = w;
+        bits.push(`${formatLength(w, model.displayUnits)} wide`);
+      }
+      if (!bits.length) throw new ModelError('Say what to change: which room it opens into, the hinge side, or the width.');
+      ctx.touch(o.id);
+      ctx.summary = `${o.label} now ${bits.join(', ')}.`;
+      break;
+    }
+
     case 'set_room_size': {
       const room = getRoom(model, args.roomId);
       if (!room.block) throw new ModelError(`${room.name} isn't a room block; move its walls to resize it.`);
       const u = model.displayUnits;
       setBlockClearSize(model, room, args.width ? ctx.length(args.width) : undefined, args.depth ? ctx.length(args.depth) : undefined);
+      const pulled = clampBlockInside(model, room);
+      if (pulled.dx || pulled.dy) ctx.note('Shifted to stay inside the outer walls.');
       // Keep furniture and fixtures inside.
       const nr = roomClearRect(model, room);
       for (const f of model.furniture) {
@@ -1202,6 +1458,43 @@ function uniqueName(m: BuildingModel, base: string): string {
   return `${base} ${n}`;
 }
 
+
+/** Make a door's leaf swing into a room (the side of the wall the room's centre is on). */
+function setSwingInto(model: BuildingModel, o: Opening, room: Room) {
+  const wall = getWall(model, o.wallId);
+  const d = wallDir(wall);
+  const p = pointOnWall(wall, o.offset);
+  // On a block's own wall: into that block, or away from it for any other room.
+  const owner = parseBlockWallId(o.wallId);
+  const ref = owner ? model.rooms.find((r) => r.id === owner.roomId)! : room;
+  const c = roomClearRect(model, ref);
+  const sign = owner && owner.roomId !== room.id ? -1 : 1;
+  const toRoom = { x: ((c.x0 + c.x1) / 2 - p.x) * sign, y: ((c.y0 + c.y1) / 2 - p.y) * sign };
+  // Same normal the plan drawing uses for swingSide 'left'.
+  const nLeft = { x: d.y, y: -d.x };
+  o.swingSide = toRoom.x * nLeft.x + toRoom.y * nLeft.y > 0 ? 'left' : 'right';
+}
+
+/** After a room block moves or turns: a door of its own now on an outer wall moves to a side facing into the building. */
+function rehomeDoors(model: BuildingModel, room: Room, ctx: Ctx) {
+  const free = SIDES4.filter((sd) => !fixedWallUnder(model, room, sd) && coincidentSides(model, room, sd).length === 0);
+  for (const o of model.openings) {
+    const p = parseBlockWallId(o.wallId);
+    if (p?.roomId !== room.id || o.kind === 'window' || /main/i.test(o.label)) continue;
+    const f = fixedWallUnder(model, room, p.side);
+    if (!f || f.kind !== 'external') continue;
+    const r = roomClearRect(model, room);
+    const len = (sd: PlanSide4) => (sd === 'top' || sd === 'bottom' ? r.x1 - r.x0 : r.y1 - r.y0);
+    const to = [...free].sort((a, b) => len(b) - len(a))[0];
+    if (!to) continue;
+    o.wallId = room.bounds[to];
+    const [s0, s1] = ctx.roomSpanAlongWall(room, getWall(model, o.wallId));
+    o.offset = Math.round((s0 + s1) / 2);
+    setSwingInto(model, o, room);
+    ctx.touch(o.id);
+    ctx.note(`${o.label} moved to the ${planSideCompass(to, model.northAngle)} side, since its wall is now an outer wall.`);
+  }
+}
 
 /** Standard clear sizes for new room blocks. */
 const ROOM_DEFAULTS: Partial<Record<Room['kind'], { w: number; h: number }>> = {

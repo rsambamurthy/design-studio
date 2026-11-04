@@ -297,6 +297,62 @@ export function setBlockClearSize(model: BuildingModel, room: Room, w?: number, 
     const side = anchored(hi) && !anchored(lo) ? lo : hi;
     resizeBlockSide(model, room, side, side === lo ? -delta : delta);
   };
-  fix('x', w);
-  fix('y', h);
+  // A side landing on (or leaving) a thicker outer wall changes the clear size, so settle it twice.
+  for (let i = 0; i < 3; i++) {
+    fix('x', w);
+    fix('y', h);
+  }
+}
+
+/** Centre-line rectangle of the outer walls. */
+export function shellAxisRect(model: BuildingModel): Rect {
+  const xs = model.walls.filter((w) => w.kind === 'external').flatMap((w) => [w.a.x, w.b.x]);
+  const ys = model.walls.filter((w) => w.kind === 'external').flatMap((w) => [w.a.y, w.b.y]);
+  return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+}
+
+/** Pull a block back inside the outer walls if it sticks out. Returns the shift applied. */
+export function clampBlockInside(model: BuildingModel, room: Room): { dx: number; dy: number } {
+  const b = room.block!;
+  const s = shellAxisRect(model);
+  const dx = b.x0 < s.x0 ? s.x0 - b.x0 : b.x1 > s.x1 ? s.x1 - b.x1 : 0;
+  const dy = b.y0 < s.y0 ? s.y0 - b.y0 : b.y1 > s.y1 ? s.y1 - b.y1 : 0;
+  if (dx || dy) translateBlock(model, room, Math.round(dx), Math.round(dy));
+  return { dx, dy };
+}
+
+/**
+ * Turn a block 90° clockwise about its centre, with its doors, furniture,
+ * fixtures, stairs and lifts. Windows on outer walls stay with the façade.
+ */
+export function rotateBlock(model: BuildingModel, room: Room) {
+  const b = room.block!;
+  const cx = (b.x0 + b.x1) / 2;
+  const cy = (b.y0 + b.y1) / 2;
+  const rot = (p: Point): Point => ({ x: Math.round(cx - (p.y - cy)), y: Math.round(cy + (p.x - cx)) });
+  const sideLen = { top: b.x1 - b.x0, bottom: b.x1 - b.x0, left: b.y1 - b.y0, right: b.y1 - b.y0 };
+  const hw = (b.y1 - b.y0) / 2;
+  const hh = (b.x1 - b.x0) / 2;
+  room.block = { ...b, x0: Math.round(cx - hw), x1: Math.round(cx + hw), y0: Math.round(cy - hh), y1: Math.round(cy + hh) };
+  const next = { top: 'right', right: 'bottom', bottom: 'left', left: 'top' } as const;
+  for (const o of model.openings) {
+    const p = parseBlockWallId(o.wallId);
+    if (p?.roomId !== room.id) continue;
+    o.wallId = blockWallId(room.id, next[p.side]);
+    if (p.side === 'left' || p.side === 'right') {
+      o.offset = Math.round(sideLen[p.side] - o.offset);
+      o.hinge = o.hinge === 'start' ? 'end' : 'start';
+      o.swingSide = o.swingSide === 'left' ? 'right' : 'left';
+    }
+  }
+  for (const f of model.furniture) {
+    if (f.roomId !== room.id) continue;
+    f.at = rot(f.at);
+    f.rotation = (f.rotation + 90) % 360;
+  }
+  for (const c of model.cores ?? []) {
+    if (c.roomId !== room.id) continue;
+    c.at = rot(c.at);
+    c.rotation = (c.rotation + 90) % 360;
+  }
 }

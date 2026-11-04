@@ -5,6 +5,8 @@ import {
   buildableRect,
   buildingOuterRect,
   diffModels,
+  coincidentSides,
+  fixedWallUnder,
   formatLength,
   getWall,
   revisionLetter,
@@ -96,6 +98,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const [busy, setBusy] = useState(false);
   const [placing, setPlacing] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedDoor, setSelectedDoor] = useState<string | null>(null);
   const [viewing, setViewing] = useState<{ number: number; model: BuildingModel } | null>(null);
   const [compare, setCompare] = useState<number[]>([]);
   const [shares, setShares] = useState<Share[] | null>(null);
@@ -107,6 +110,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
 
   const model = viewing?.model ?? design.model;
   const selectedRoom = model.rooms.find((r) => r.id === selected && r.block);
+  const selectedDoorObj = model.openings.find((o) => o.id === selectedDoor);
   const current = design.revisions.find((r) => r.number === design.currentRev);
   const issues = useMemo(() => runChecks(model), [model]);
   const counts = {
@@ -131,7 +135,10 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     if (tab === 'share' && shares === null) void loadShares();
   }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Kept in step with the log so a run of instructions sends the latest conversation.
+  const chatRef = useRef<ChatEntry[]>([]);
   function say(entry: ChatEntry) {
+    chatRef.current = [...chatRef.current, entry];
     setLog((l) => [...l, entry]);
   }
 
@@ -185,9 +192,13 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   async function sendOne(message: string, step?: { n: number; of: number }): Promise<boolean> {
     say({ role: 'user', text: step ? `(${step.n}/${step.of}) ${message}` : message });
     try {
+      const history = chatRef.current
+        .filter((e) => e.text && !e.error)
+        .slice(-16)
+        .map((e) => ({ role: e.role, text: e.text, options: e.options }));
       const r = await api<{ turn: Turn; revision: number | null; design: DesignDetail }>(`/api/designs/${design.id}/chat`, {
         method: 'POST',
-        json: { message },
+        json: { message, history },
       });
       if (r.revision) {
         setDesign(r.design);
@@ -456,6 +467,9 @@ export default function Studio({ email, initial }: { email: string; initial: Des
                 />
                 <button className="btn-primary" type="submit" disabled={busy || !input.trim() || !!viewing}>{lineCount > 1 ? `Run ${lineCount}` : 'Send'}</button>
               </form>
+              <button type="button" className="link-btn chat-download" onClick={() => downloadChat(design.name, log)}>
+                ⤓ Download chat
+              </button>
               <p className="chat-hint">Enter sends · Alt+Enter adds another instruction; they run one after the other, each saved as its own revision.</p>
             </div>
           )}
@@ -601,8 +615,30 @@ export default function Studio({ email, initial }: { email: string; initial: Des
                 onPlace={dragEdit ? place : undefined}
                 placing={placing}
                 selectedId={selected}
-                onSelect={setSelected}
+                onSelect={(id) => {
+                  setSelected(id);
+                  if (id) setSelectedDoor(null);
+                }}
+                selectedDoorId={selectedDoor}
+                onSelectDoor={(id) => {
+                  setSelectedDoor(id);
+                  if (id) setSelected(null);
+                }}
               />
+              {selectedDoorObj && !viewing && (
+                <DoorEditor
+                  key={`${selectedDoorObj.id}-${design.currentRev}`}
+                  model={model}
+                  door={selectedDoorObj}
+                  busy={busy}
+                  onApply={(request, ops) => void applyOps(request, ops, false)}
+                  onRemove={() => {
+                    setSelectedDoor(null);
+                    void applyOps(`Removed ${selectedDoorObj.label}`, [{ op: 'remove', args: { entityId: selectedDoorObj.id } }], false);
+                  }}
+                  onClose={() => setSelectedDoor(null)}
+                />
+              )}
               {selectedRoom && !viewing && (
                 <RoomEditor
                   key={`${selectedRoom.id}-${design.currentRev}`}
@@ -706,6 +742,12 @@ function RoomEditor({
     if (name.trim() && name.trim() !== room.name) ops.push({ op: 'rename_room', args: { roomId: room.id, name: name.trim() } });
     if (ops.length) onApply(`Changed ${room.name}`, ops);
   };
+  // Rooms this one shares a wall with, plus the open space if a side faces it.
+  const sides = ['top', 'bottom', 'left', 'right'] as const;
+  const touching = sides.flatMap((sd) => coincidentSides(model, room, sd).map((c) => c.room));
+  const open = model.rooms.find((r) => !r.block && (r.kind === 'living' || r.kind === 'dining'));
+  const facesOpen = sides.some((sd) => !fixedWallUnder(model, room, sd) && coincidentSides(model, room, sd).length === 0);
+  const neighbours = [...new Map([...touching, ...(open && facesOpen ? [open] : [])].map((r) => [r.id, r])).values()];
   const ew = model.northAngle === 0 ? ' (E–W)' : '';
   const ns = model.northAngle === 0 ? ' (N–S)' : '';
   return (
@@ -724,10 +766,122 @@ function RoomEditor({
       </label>
       <div className="room-editor-btns">
         <button className="btn-primary" type="submit" disabled={busy}>Apply</button>
+        <button className="btn-secondary" type="button" disabled={busy} onClick={() => onApply(`Rotated ${room.name}`, [{ op: 'rotate_room', args: { roomId: room.id, degrees: '90' } }])}>
+          ⟳ Rotate 90°
+        </button>
+        {neighbours.length > 0 && (
+          <select
+            aria-label="Add a door to"
+            value=""
+            disabled={busy}
+            onChange={(e) => {
+              const other = neighbours.find((n) => n.id === e.target.value);
+              if (other) onApply(`Door between ${room.name} and ${other.name}`, [{ op: 'add_door_between', args: { roomA: room.id, roomB: other.id } }]);
+            }}
+          >
+            <option value="">Add door to…</option>
+            {neighbours.map((n) => (
+              <option key={n.id} value={n.id}>{n.name}</option>
+            ))}
+          </select>
+        )}
         <button className="btn-secondary" type="button" onClick={onRemove} disabled={busy}>Remove room</button>
         <button className="link-btn" type="button" onClick={onClose}>Close</button>
       </div>
       <p className="room-editor-hint">Clear sizes, inside face to inside face. Sides against walls or other rooms stay put.</p>
     </form>
   );
+}
+
+/** Selected door: which room it opens into, hinge side, width, remove. */
+function DoorEditor({
+  model,
+  door,
+  busy,
+  onApply,
+  onRemove,
+  onClose,
+}: {
+  model: BuildingModel;
+  door: BuildingModel['openings'][number];
+  busy: boolean;
+  onApply: (request: string, ops: OpInput[]) => void;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
+  const u = model.displayUnits;
+  const [w, setW] = useState(formatLength(door.width, u));
+  // The rooms on either side of the door.
+  const wall = getWall(model, door.wallId);
+  const d = { x: wall.b.x - wall.a.x, y: wall.b.y - wall.a.y };
+  const len = Math.hypot(d.x, d.y) || 1;
+  const n = { x: d.y / len, y: -d.x / len };
+  const p = { x: wall.a.x + (d.x / len) * door.offset, y: wall.a.y + (d.y / len) * door.offset };
+  const at = (k: number) => {
+    const q = { x: p.x + n.x * (wall.thickness / 2 + 150) * k, y: p.y + n.y * (wall.thickness / 2 + 150) * k };
+    const hits = model.rooms.filter((r) => {
+      const c = roomClearRect(model, r);
+      return q.x >= c.x0 && q.x <= c.x1 && q.y >= c.y0 && q.y <= c.y1;
+    });
+    return hits.find((r) => r.block) ?? hits[0];
+  };
+  const sidesRooms = [at(1), at(-1)].filter((r): r is NonNullable<typeof r> => !!r);
+  const apply = (e: FormEvent) => {
+    e.preventDefault();
+    if (w.trim() && w.trim() !== formatLength(door.width, u)) onApply(`Changed ${door.label}`, [{ op: 'edit_door', args: { openingId: door.id, width: w.trim() } }]);
+  };
+  const isDoor = door.kind === 'door';
+  return (
+    <form className="room-editor" onSubmit={apply} aria-label={`Edit ${door.label}`}>
+      <label>
+        {door.label}
+        <input value={w} onChange={(e) => setW(e.target.value)} aria-label="Door width" />
+      </label>
+      <div className="room-editor-btns">
+        <button className="btn-primary" type="submit" disabled={busy}>Apply</button>
+        {isDoor &&
+          sidesRooms.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              className="btn-secondary"
+              disabled={busy}
+              onClick={() => onApply(`${door.label} opens into ${r.name}`, [{ op: 'edit_door', args: { openingId: door.id, opensInto: r.id } }])}
+            >
+              Opens into {r.name}
+            </button>
+          ))}
+        {isDoor && (
+          <button type="button" className="btn-secondary" disabled={busy} onClick={() => onApply(`Flipped the hinge of ${door.label}`, [{ op: 'edit_door', args: { openingId: door.id, flipHinge: true } }])}>
+            ⇆ Flip hinge
+          </button>
+        )}
+        <button className="btn-secondary" type="button" onClick={onRemove} disabled={busy}>Remove</button>
+        <button className="link-btn" type="button" onClick={onClose}>Close</button>
+      </div>
+      <p className="room-editor-hint">Drag the door along its wall to move it.</p>
+    </form>
+  );
+}
+
+/** Save the conversation as a plain text file. */
+function downloadChat(name: string, log: ChatEntry[]) {
+  const lines: string[] = [`${name} — design chat`, `Saved ${new Date().toLocaleString('en-IN')}`, ''];
+  for (const e of log) {
+    lines.push(`${e.role === 'user' ? 'You' : 'Assistant'}: ${e.text}`);
+    if (e.options?.length) lines.push(`  Options: ${e.options.join(' | ')}`);
+    for (const a of e.assumptions ?? []) lines.push(`  Assumed: ${a}`);
+    for (const i of e.newIssues ?? []) lines.push(`  ⚠ ${i.message}`);
+    if (e.saved) lines.push(`  Saved as Rev ${revisionLetter(e.saved)}`);
+    lines.push('');
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${name.replace(/[^\w\- ]+/g, '').trim() || 'design'} chat.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

@@ -338,3 +338,8 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .room-editor-btns { display: flex; gap: 8px; align-items: center; }
 .room-editor-hint { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--color-muted); }
 .shell-hint { margin: 4px 0 0; font-size: 13px; color: var(--color-muted); }
+.plan-svg .live-gaps line { stroke: #b45309; stroke-width: 28; }
+.plan-svg .live-gaps text { fill: #b45309; font-weight: 700; font-family: var(--font); paint-order: stroke; stroke: rgba(255,255,255,.9); stroke-width: 70px; stroke-linejoin: round; }
+.plan-svg .door-selected { fill: rgba(49, 46, 129, .10); stroke: var(--theme-primary); stroke-width: 50; stroke-dasharray: 160 100; pointer-events: none; }
+.room-editor select { height: 38px; border-radius: 10px; }
+.chat-download { float: right; font-size: 12px; margin-top: 6px; }

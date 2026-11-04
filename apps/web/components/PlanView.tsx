@@ -11,6 +11,9 @@ import {
   coreFootprint,
   itemFootprint,
   enclosureOf,
+  translateBlock,
+  clampBlockInside,
+  snapBlock,
   blockWallRects,
   formatFtIn,
   formatLength,
@@ -48,12 +51,14 @@ interface Props {
   placing?: string | null;
   selectedId?: string | null;
   onSelect?: (roomId: string | null) => void;
+  selectedDoorId?: string | null;
+  onSelectDoor?: (openingId: string | null) => void;
 }
 
 const PAD = 1800;
 const INCH = 25.4;
 
-export default function PlanView({ model, changedIds, issues, onEdit, onPlace, placing, selectedId, onSelect }: Props) {
+export default function PlanView({ model, changedIds, issues, onEdit, onPlace, placing, selectedId, onSelect, selectedDoorId, onSelectDoor }: Props) {
   const bounds = useMemo(() => {
     const xs = model.walls.flatMap((w) => [w.a.x, w.b.x]);
     const ys = model.walls.flatMap((w) => [w.a.y, w.b.y]);
@@ -66,9 +71,9 @@ export default function PlanView({ model, changedIds, issues, onEdit, onPlace, p
       label={`Plan of ${model.name}`}
       editable={!!onEdit}
       onDropData={onEdit && onPlace ? (data, p) => onPlace(data, p) : undefined}
-      onTap={onEdit ? (p) => (placing && onPlace ? onPlace(placing, p) : onSelect?.(null)) : undefined}
+      onTap={onEdit ? (p) => (placing && onPlace ? onPlace(placing, p) : (onSelect?.(null), onSelectDoor?.(null))) : undefined}
     >
-      <PlanContent model={model} changedIds={changedIds} issues={issues} onEdit={onEdit} bounds={bounds} selectedId={selectedId} onSelect={onSelect} />
+      <PlanContent model={model} changedIds={changedIds} issues={issues} onEdit={onEdit} bounds={bounds} selectedId={selectedId} onSelect={onSelect} selectedDoorId={selectedDoorId} onSelectDoor={onSelectDoor} />
     </ZoomSvg>
   );
 }
@@ -78,13 +83,26 @@ function snap(v: number): number {
   return Math.round(v / INCH) * INCH;
 }
 
-function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, onSelect }: Props & { bounds: { x0: number; y0: number; x1: number; y1: number } }) {
+function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, onSelect, selectedDoorId, onSelectDoor }: Props & { bounds: { x0: number; y0: number; x1: number; y1: number } }) {
   const begin = useDrag();
   const [preview, setPreview] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const u = model.displayUnits;
   const font = 300;
   const compass = (v: Vec) => vectorToCompass(v, model.northAngle);
-  const shift = (id: string) => (preview?.id === id ? `translate(${preview.dx} ${preview.dy})` : undefined);
+  // While a room block is dragged, everything that belongs to it moves with it.
+  const dragging = preview?.id.startsWith('room:') ? preview.id.slice(5) : undefined;
+  const carried = useMemo(() => {
+    const ids = new Set<string>();
+    if (!dragging) return ids;
+    ids.add(dragging);
+    for (const sd of ['top', 'bottom', 'left', 'right']) ids.add(`blk:${dragging}:${sd}`);
+    for (const o of model.openings) if (o.wallId.startsWith(`blk:${dragging}:`)) ids.add(o.id);
+    for (const f of model.furniture) if (f.roomId === dragging) ids.add(f.id);
+    for (const c of model.cores ?? []) if (c.roomId === dragging) ids.add(c.id);
+    return ids;
+  }, [dragging, model]);
+  const shift = (id: string) =>
+    preview && (preview.id === id || carried.has(id) || (dragging && id === `room:${dragging}`)) ? `translate(${preview.dx} ${preview.dy})` : undefined;
 
   /** Start a drag whose movement is constrained by `project` (returns the allowed offset). */
   const startDrag = (e: PointerEvent<SVGElement>, id: string, project: (d: Vec) => Vec, finish: (d: Vec) => void) => {
@@ -148,7 +166,10 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, on
       },
       (v) => {
         const t = v.x * d.x + v.y * d.y;
-        if (Math.abs(t) < INCH) return;
+        if (Math.abs(t) < INCH) {
+          onSelectDoor?.(o.id);
+          return;
+        }
         const dir = compass({ x: d.x * Math.sign(t), y: d.y * Math.sign(t) });
         const dist = formatFtIn(Math.abs(t));
         onEdit?.(`Dragged ${o.label} ${dist} ${dir}`, [{ op: 'move_opening', args: { openingId: o.id, direction: dir, distance: dist } }]);
@@ -193,18 +214,35 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, on
     if (!r.block && (r.kind === 'living' || r.kind === 'dining') && model.rooms.some((x) => x.block)) return;
     setGrab({ roomId: r.id, from });
     if (r.block) {
-      startDrag(e, `room:${r.id}`, free, (v) => {
+      const b0 = r.block;
+      let raw: Vec = { x: 0, y: 0 };
+      // Preview = what will be saved: moved, kept inside, lined up with walls within 1'.
+      const settle = (v: Vec) => {
+        raw = v;
+        const m = structuredClone(model);
+        const rr = m.rooms.find((x) => x.id === r.id)!;
+        translateBlock(m, rr, snap(v.x), snap(v.y));
+        clampBlockInside(m, rr);
+        snapBlock(m, rr);
+        return { x: rr.block!.x0 - b0.x0, y: rr.block!.y0 - b0.y0 };
+      };
+      startDrag(e, `room:${r.id}`, settle, (v) => {
         setGrab(null);
-        if (Math.abs(v.x) < INCH && Math.abs(v.y) < INCH) {
+        if (Math.abs(raw.x) < INCH && Math.abs(raw.y) < INCH) {
           onSelect?.(r.id);
           return;
         }
-        const target = dropOn(r.id, { x: from.x + v.x, y: from.y + v.y });
+        const target = dropOn(r.id, { x: from.x + raw.x, y: from.y + raw.y });
         if (target) {
           onEdit(`Moved ${r.name} to where ${target.name} is`, [{ op: 'swap_rooms', args: { roomA: r.id, roomB: target.id } }]);
           return;
         }
-        freeMoves(v, r.name, (direction, distance) => ({ op: 'move_room', args: { roomId: r.id, direction, distance } }));
+        if (Math.abs(v.x) < 1 && Math.abs(v.y) < 1) return;
+        const words = [
+          Math.abs(v.x) >= 1 ? `${formatFtIn(Math.abs(v.x))} ${compass({ x: Math.sign(v.x), y: 0 })}` : '',
+          Math.abs(v.y) >= 1 ? `${formatFtIn(Math.abs(v.y))} ${compass({ x: 0, y: Math.sign(v.y) })}` : '',
+        ].filter(Boolean);
+        onEdit(`Dragged ${r.name} ${words.join(', ')}`, [{ op: 'set_room_position', args: { roomId: r.id, x: b0.x0 + v.x, y: b0.y0 + v.y } }]);
       });
       return;
     }
@@ -221,7 +259,7 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, on
       {/* Rooms (fills only; labels are drawn last so furniture never hides them) */}
       {[...model.rooms].sort((a, b) => Number(!!a.block) - Number(!!b.block)).map((r) => {
         const c = roomClearRect(model, r);
-        return <rect key={r.id} x={c.x0} y={c.y0} width={c.x1 - c.x0} height={c.y1 - c.y0} className={`room ${r.wet ? 'wet' : ''} ${r.kind === 'stair' || r.kind === 'lift' ? 'core-room' : ''} ${changedIds.has(r.id) ? 'hot' : ''}`} />;
+        return <rect key={r.id} transform={shift(r.id)} x={c.x0} y={c.y0} width={c.x1 - c.x0} height={c.y1 - c.y0} className={`room ${r.wet ? 'wet' : ''} ${r.kind === 'stair' || r.kind === 'lift' ? 'core-room' : ''} ${changedIds.has(r.id) ? 'hot' : ''}`} />;
       })}
 
       {/* Walls */}
@@ -247,14 +285,6 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, on
           })()}
         </g>
       ))}
-
-      {/* Ghost of a room block being dragged */}
-      {grab && !dropTarget && preview?.id === `room:${grab.roomId}` && (() => {
-        const r = model.rooms.find((x) => x.id === grab.roomId);
-        if (!r?.block) return null;
-        const b = r.block;
-        return <rect x={b.x0 + preview.dx} y={b.y0 + preview.dy} width={b.x1 - b.x0} height={b.y1 - b.y0} className="block-ghost" />;
-      })()}
 
       {/* Openings */}
       {model.openings.map((o) => (
@@ -334,8 +364,26 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, on
         );
       })}
 
+      {/* Live distances from a dragged or selected room to the walls and rooms around it */}
+      {(() => {
+        const id = dragging ?? selectedId ?? undefined;
+        const r = id ? model.rooms.find((x) => x.id === id) : undefined;
+        if (!r?.block) return null;
+        const off = dragging && preview ? { x: preview.dx, y: preview.dy } : { x: 0, y: 0 };
+        return <LiveGaps model={model} room={r} off={off} />;
+      })()}
+
+      {/* Selected door */}
+      {selectedDoorId && (() => {
+        const o = model.openings.find((x) => x.id === selectedDoorId);
+        if (!o) return null;
+        const w = getWall(model, o.wallId);
+        const p = pointOnWall(w, o.offset);
+        return <circle cx={p.x} cy={p.y} r={o.width * 0.75} className="door-selected" />;
+      })()}
+
       {/* Live dimension while dragging */}
-      {preview && (Math.abs(preview.dx) >= INCH || Math.abs(preview.dy) >= INCH) && (
+      {preview && !dragging && (Math.abs(preview.dx) >= INCH || Math.abs(preview.dy) >= INCH) && (
         <text className="drag-readout" x={(bounds.x0 + bounds.x1) / 2} y={bounds.y1 + 1100} fontSize={360}>
           {[preview.dx, preview.dy]
             .map((v, i) => (Math.abs(v) >= INCH ? `${formatFtIn(Math.abs(v))} ${compass(i === 0 ? { x: Math.sign(v), y: 0 } : { x: 0, y: Math.sign(v) })}` : null))
@@ -625,4 +673,61 @@ function openLabelPoint(model: BuildingModel, room: Room): [number, number] {
     }
   }
   return best;
+}
+
+/**
+ * Dimension lines from each side of a room block (moved by `off`) to the nearest
+ * thing in front of it: another room's wall face or the outer wall's inside face.
+ */
+function LiveGaps({ model, room, off }: { model: BuildingModel; room: Room; off: Vec }) {
+  const b = room.block!;
+  const r = { x0: b.x0 + off.x, x1: b.x1 + off.x, y0: b.y0 + off.y, y1: b.y1 + off.y };
+  const t = b.thickness / 2;
+  const ext = model.walls.filter((w) => w.kind === 'external');
+  if (ext.length === 0) return null;
+  const E = ext[0]!.thickness / 2;
+  const xs = ext.flatMap((w) => [w.a.x, w.b.x]);
+  const ys = ext.flatMap((w) => [w.a.y, w.b.y]);
+  const inner = { x0: Math.min(...xs) + E, x1: Math.max(...xs) - E, y0: Math.min(...ys) + E, y1: Math.max(...ys) - E };
+  const others = model.rooms.filter((o) => o.block && o.id !== room.id).map((o) => ({ ...o.block!, t: o.block!.thickness / 2 }));
+  const lines: { a: Vec; b: Vec; d: number; touch: boolean }[] = [];
+  const cx = (r.x0 + r.x1) / 2;
+  const cy = (r.y0 + r.y1) / 2;
+  for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+    const horizontal = side === 'top' || side === 'bottom';
+    const myFace = side === 'top' ? r.y0 - t : side === 'bottom' ? r.y1 + t : side === 'left' ? r.x0 - t : r.x1 + t;
+    let face = side === 'top' ? inner.y0 : side === 'bottom' ? inner.y1 : side === 'left' ? inner.x0 : inner.x1;
+    let at = horizontal ? cx : cy;
+    for (const o of others) {
+      const ov0 = horizontal ? Math.max(r.x0, o.x0) : Math.max(r.y0, o.y0);
+      const ov1 = horizontal ? Math.min(r.x1, o.x1) : Math.min(r.y1, o.y1);
+      if (ov1 - ov0 <= 50) continue;
+      const f = side === 'top' ? o.y1 + o.t : side === 'bottom' ? o.y0 - o.t : side === 'left' ? o.x1 + o.t : o.x0 - o.t;
+      const ahead = side === 'top' || side === 'left' ? f <= myFace + 2 * t + 2 : f >= myFace - 2 * t - 2;
+      const nearer = side === 'top' || side === 'left' ? f > face : f < face;
+      if (ahead && nearer) {
+        face = f;
+        at = (ov0 + ov1) / 2;
+      }
+    }
+    const d = Math.abs(myFace - face);
+    const touch = d < 2 * t + 5;
+    if (horizontal) lines.push({ a: { x: at, y: myFace }, b: { x: at, y: face }, d: touch ? 0 : d, touch });
+    else lines.push({ a: { x: myFace, y: at }, b: { x: face, y: at }, d: touch ? 0 : d, touch });
+  }
+  return (
+    <g className="live-gaps">
+      {lines.map((l, k) =>
+        l.touch ? null : (
+          <g key={k}>
+            <line x1={l.a.x} y1={l.a.y} x2={l.b.x} y2={l.b.y} />
+            <line x1={l.b.x - (l.a.y === l.b.y ? 0 : 150)} y1={l.b.y - (l.a.y === l.b.y ? 150 : 0)} x2={l.b.x + (l.a.y === l.b.y ? 0 : 150)} y2={l.b.y + (l.a.y === l.b.y ? 150 : 0)} />
+            <text x={(l.a.x + l.b.x) / 2 + (l.a.x === l.b.x ? 160 : 0)} y={(l.a.y + l.b.y) / 2 + (l.a.y === l.b.y ? -110 : 90)} fontSize={260} textAnchor={l.a.x === l.b.x ? 'start' : 'middle'}>
+              {formatFtIn(Math.round(l.d))}
+            </text>
+          </g>
+        ),
+      )}
+    </g>
+  );
 }

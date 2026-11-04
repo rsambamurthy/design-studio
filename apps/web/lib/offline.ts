@@ -96,6 +96,34 @@ function planOps(model: BuildingModel, s: string): Operation[] {
     return [parseOperation('add_toilet', { roomId: r.id })];
   }
 
+  const roomRef = (ref: string) => {
+    const t = ref.trim().replace(/^b(\d)$/i, 'bed $1').replace(/^t(\d)$/i, 'toilet $1');
+    const r = findEntities(model, t).find((e) => e.type === 'room');
+    if (!r) throw new Error(`Which room is "${ref}"?`);
+    return r;
+  };
+
+  // "make T1 horizontal" / "rotate bed 2"
+  if ((m = s.match(/^(?:make|turn|rotate)\s+(?:the\s+)?(.+?)(?:\s+(horizontal|vertical|90|by 90|180))?$/)) && /horizontal|vertical|^rotate|^turn/.test(s) && !/\binto\b/.test(s)) {
+    const r = roomRef(m[1]!);
+    return [parseOperation('rotate_room', { roomId: r.id, degrees: m[2] === '180' ? '180' : '90' })];
+  }
+
+  // "put T2 against T1's north wall [aligned west]" / "bring T2 adjacent to T1 north wall"
+  if ((m = s.match(/^(?:put|bring|move|place)\s+(?:the\s+)?(.+?)\s+(?:against|adjacent to|next to|beside)\s+(?:the\s+)?(.+?)(?:'s)?\s+(north|south|east|west)(?:\s+(?:outer\s+)?wall)?(?:,?\s+(?:aligned|lined up)\s+(?:to\s+|on\s+|with\s+)?(?:the\s+)?(north|south|east|west)(?:\s+wall)?)?$/))) {
+    const r = roomRef(m[1]!);
+    const outer = /^(?:the\s+)?(?:outer|outside)?$/.test(m[2]!.trim()) || /outer/.test(m[2]!);
+    const target = outer ? 'outer' : roomRef(m[2]!).id;
+    return [parseOperation('place_room_against', { roomId: r.id, targetId: target, side: m[3], align: m[4] ?? 'keep' })];
+  }
+
+  // "door between bed 2 and toilet 2" / "entrance to T2 from B2"
+  if ((m = s.match(/^(?:add\s+(?:a\s+)?)?(?:door|entrance|opening)\s+(?:between\s+(.+?)\s+and\s+(.+)|to\s+(.+?)\s+from\s+(.+))$/))) {
+    const a = roomRef(m[1] ?? m[3]!);
+    const b = roomRef(m[2] ?? m[4]!);
+    return [parseOperation('add_door_between', { roomA: b.id, roomB: a.id })];
+  }
+
   // "add a bedroom" / "add a bathroom" / "add the stairs"
   if ((m = s.match(/^add\s+(?:a\s+|an\s+|the\s+)?(bedroom|bathroom|toilet|kitchen|lobby|store|pooja(?: room)?|utility|stairs?|staircase|lift)$/))) {
     const w = m[1]!;
@@ -107,8 +135,7 @@ function planOps(model: BuildingModel, s: string): Operation[] {
 
   // "make bed 1 13' by 11'" (width by depth)
   if ((m = s.match(new RegExp(String.raw`^(?:make|set|size)\s+(?:the\s+)?(.+?)\s+(?:to\s+)?${LEN}\s*(?:by|x|×)\s*${LEN}$`)))) {
-    const r = findEntities(model, m[1]!).find((e) => e.type === 'room');
-    if (!r) throw new Error(`Which room is "${m[1]}"?`);
+    const r = roomRef(m[1]!);
     return [parseOperation('set_room_size', { roomId: r.id, width: m[2]!.trim(), depth: m[3]!.trim() })];
   }
 

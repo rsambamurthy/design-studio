@@ -39,13 +39,19 @@ Rules:
 - Distances: pass the user's text exactly ("8 inches", "1'6\\""). Never convert units yourself.
 - Directions: use compass words. "Up/down/left/right on the plan" are NOT compass words; if the user uses them, ask which compass direction they mean unless the summary's orientation makes it unambiguous (north up: up=north, right=east).
 - Room sizes in the summary are CLEAR (inside face to inside face). If the user's number could be clear or centre-to-centre and the difference matters, ask.
-- Ask (call ask_user, then stop) ONLY when two readings would produce different geometry and you cannot tell which is meant. Otherwise act and let the user undo.
+- ACT when the request is clear enough to do, even if loosely worded; the user can undo. Ask (ask_user, then stop) only when two readings give clearly different results, at most ONE question per request, and never for something the summary already tells you (positions, sizes, gaps, which rooms touch). Read the CONVERSATION: a short reply like "North of Bed 1" or "10'0"" answers your previous question; carry on from it instead of asking again.
+- Talk to the user in room and door NAMES (Toilet 2, Bed 1 door), never ids like r-3 or door-4. Abbreviations: B1 = Bed 1, T2 = Toilet 2, K = Kitchen.
 - Site (plot, setbacks, road/passage, trees, building position): set_plot must come first if the summary says there is no plot. A passage that runs inside the plot along one side is set_access kind "passage"; it usually matches that side's setback. After site changes, mention any setback the building now breaks. If the layout is too big or small for the buildable area, offer fit_to_buildable (it resizes rooms in proportion).
 - Bedrooms, toilets, the lobby, the kitchen and similar rooms are movable BLOCKS (marked "block" in the model summary): each has its own walls (ids blk:<room>:<side>) and moves as one piece with its doors, furniture, stair and lift: move_room. The living/dining area is the open space around the blocks and is not moved. Resize a block by moving one of its walls (move_wall on its blk: wall; a block sharing that line resizes with it). add_room puts a new room block in free space (with a door, a window on an outer wall and fixtures); set_room_size types a block's clear width/depth; remove_room takes a block out. A design may start as a bare shell (outer walls only): build it by adding rooms, stairs and lift. To exchange two rooms' places use swap_rooms; move_room_to swaps with the room in a corner. In older designs without blocks, rooms are fixed by walls: use swap_rooms / move_room_to, and move_wall to resize.
 - Stairs and lifts are self-contained walled units (add_stair, add_lift, move_core, place_core, rotate_core, remove). They carry their own walls and entry (stair foot, lift door) and can be moved anywhere, including into another room: move_core or place_core. Don't split rooms to make a stair or lift.
 - To add a toilet use add_toilet on the bedroom it should be attached to (or the living room for a common toilet); it picks a wall without the room's door or window, adds the door, a ventilator and a dress or wash area. To drop a toilet, set_room_use it to a Store (kind other). set_room_use also changes any room's use.
 - Fixtures (WC, wash basin, shower area, kitchen counter with sink and hob) are catalogue items like furniture: place_item / move_item / rotate_item / remove. fit_out adds the standard set to a toilet or kitchen.
 - split_room divides any room with a new wall (new toilet, store, dress, stair, lift). The new room has no door until you add one.
+- POSITIONS: every room block has a "place" line: on each compass side, the gap to the outer wall and the room it shares a wall with or faces (with the gap). Use these to answer distance questions with a number, and to work out moves. Never say you cannot see positions.
+- Relative placement ("put T2 next to / adjacent to / against T1's north wall", "align it to the west wall"): use place_room_against (targetId a room id, or "outer" for an outer wall; align north/south/east/west/centre). Never guess a distance for this.
+- Doors: "entrance to T2 from B2", "door from Bed 1 into the toilet": add_door_between (it finds the shared wall, centres the door on it, opens into the smaller room). If they don't touch, say so and offer to place one against the other. "Open inwards / into the toilet": edit_door opensInto. Remove an unwanted door with remove.
+- "Make T1 horizontal / vertical", "turn / rotate the bedroom": rotate_room (fixtures turn with it). Do NOT swap width and depth with set_room_size for this.
+- Sizes like "13x14" or "13 by 14" mean width × depth (east–west × north–south when north is up), clear: set_room_size.
 - Several operations in one turn are fine; they become one revision.
 - If an operation returns an error, either fix your call or explain the problem plainly. Do not retry the same call.
 - Finish with ONE short sentence of what changed. The app shows assumptions, knock-on effects and check results separately, so do not repeat them.`;
@@ -72,7 +78,13 @@ const EXTRA_TOOLS = [
   },
 ] as const;
 
-export async function runTurn(start: BuildingModel, message: string, recent: string[] = []): Promise<TurnResult> {
+export interface ChatLine {
+  role: 'user' | 'ai';
+  text: string;
+  options?: string[];
+}
+
+export async function runTurn(start: BuildingModel, message: string, recent: string[] = [], conversation: ChatLine[] = []): Promise<TurnResult> {
   const client = new Anthropic();
   const modelId = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
   const tools = [...operationToolDefinitions(), ...EXTRA_TOOLS];
@@ -86,7 +98,11 @@ export async function runTurn(start: BuildingModel, message: string, recent: str
   let question: TurnResult['question'];
   let finalText = '';
 
-  const context = `CURRENT MODEL\n${modelSummary(model)}${recent.length ? `\n\nRECENT REQUESTS (oldest first)\n${recent.map((r) => `- ${r}`).join('\n')}` : ''}`;
+  const convo = conversation
+    .slice(-16)
+    .map((l) => `${l.role === 'user' ? 'User' : 'Assistant'}: ${l.text.slice(0, 400)}${l.options?.length ? ` [options offered: ${l.options.join(' | ')}]` : ''}`)
+    .join('\n');
+  const context = `CURRENT MODEL\n${modelSummary(model)}${convo ? `\n\nCONVERSATION SO FAR (oldest first)\n${convo}` : recent.length ? `\n\nRECENT REQUESTS (oldest first)\n${recent.map((r) => `- ${r}`).join('\n')}` : ''}`;
   const messages: Anthropic.MessageParam[] = [{ role: 'user', content: `${context}\n\nUSER REQUEST\n${message}` }];
 
   for (let step = 0; step < MAX_STEPS; step++) {

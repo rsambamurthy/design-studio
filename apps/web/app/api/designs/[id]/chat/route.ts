@@ -1,5 +1,5 @@
 import { AuthError } from '@/lib/auth';
-import { errorText, runTurn, type TurnResult } from '@/lib/agent';
+import { errorText, runTurn, type ChatLine, type TurnResult } from '@/lib/agent';
 import { appendRevision, getDesign } from '@/lib/designs';
 import { readJson, withUser } from '@/lib/http';
 import { runOfflineTurn } from '@/lib/offline';
@@ -15,6 +15,18 @@ export const POST = withUser<Ctx>(async (user, req, ctx) => {
   const message = String(body.message ?? '').trim().slice(0, 2000);
   if (!message) throw new AuthError('Type a change first.');
 
+  const conversation: ChatLine[] = (Array.isArray(body.history) ? body.history : [])
+    .slice(-16)
+    .map((h: unknown) => {
+      const x = (h ?? {}) as { role?: unknown; text?: unknown; options?: unknown };
+      return {
+        role: x.role === 'user' ? 'user' : 'ai',
+        text: String(x.text ?? '').slice(0, 600),
+        options: Array.isArray(x.options) ? x.options.slice(0, 4).map((o) => String(o).slice(0, 120)) : undefined,
+      } as ChatLine;
+    })
+    .filter((l: ChatLine) => l.text);
+
   const design = await getDesign(user.id, id);
   const recent = design.revisions
     .slice(0, 5)
@@ -28,7 +40,7 @@ export const POST = withUser<Ctx>(async (user, req, ctx) => {
     turn = runOfflineTurn(design.model, message);
   } else {
     try {
-      turn = await runTurn(design.model, message, recent);
+      turn = await runTurn(design.model, message, recent, conversation);
     } catch (err) {
       console.error('[chat] LLM turn failed', err);
       const fallback = runOfflineTurn(design.model, message);

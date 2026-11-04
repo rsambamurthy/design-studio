@@ -50,7 +50,7 @@ export function runChecks(model: BuildingModel): Issue[] {
         severity: 'advisory',
         message: `${room.name} is ${formatLength(shorter, u)} wide; a ${min.label} is typically at least ${formatLength(min.minSide, u)}.`,
         entityIds: [room.id],
-        at: centre(r),
+        at: corner(r),
       });
     }
   }
@@ -175,7 +175,7 @@ function plumbingChecks(model: BuildingModel): Issue[] {
       severity: 'advisory',
       message: `${r.name} has no plumbing or outer wall for pipes and drains; check the routing.`,
       entityIds: [r.id],
-      at: { x: (c.x0 + c.x1) / 2, y: (c.y0 + c.y1) / 2 },
+      at: { x: c.x0 + 320, y: c.y1 - 320 },
     });
   }
   return out;
@@ -328,10 +328,21 @@ function blockChecks(model: BuildingModel): Issue[] {
       const sides = ['top', 'bottom', 'left', 'right'] as const;
       const hasWindow = sides.some((sd) => roomOpeningsOn(model, r, sd).some((x) => x.kind === 'window' || x.kind === 'sliding'));
       if (!hasWindow) {
-        out.push({ code: 'room.no-window', severity: 'advisory', message: `${r.name} has no window; move it to an outer wall or add one.`, entityIds: [r.id], at: centre(roomClearRect(model, r)) });
+        out.push({ code: 'room.no-window', severity: 'advisory', message: `${r.name} has no window; move it to an outer wall or add one.`, entityIds: [r.id], at: corner(roomClearRect(model, r)) });
       }
     }
   });
+  // A room's own door that has ended up on an outer wall leads outside.
+  for (const o of model.openings) {
+    const m = /^blk:(.+):(top|bottom|left|right)$/.exec(o.wallId);
+    if (!m || o.kind === 'window' || /main/i.test(o.label)) continue;
+    const r = model.rooms.find((x) => x.id === m[1]);
+    const f = r ? fixedWallUnder(model, r, m[2] as PlanSide) : undefined;
+    if (f && f.kind === 'external') {
+      const w = getWall(model, o.wallId);
+      out.push({ code: 'door.outside', severity: 'warning', message: `${o.label} is on the outer wall, so it opens outside. Move the room or the door.`, entityIds: [o.id], at: pointOnWall(w, o.offset) });
+    }
+  }
   // Stairs, lifts and furniture belong to the block they stand in.
   for (const c of model.cores ?? []) {
     const inBlock = blocks.find((r) => {
@@ -344,4 +355,9 @@ function blockChecks(model: BuildingModel): Issue[] {
     }
   }
   return out;
+}
+
+/** Marker spot in a room's top-left corner, clear of its name. */
+function corner(r: Rect): Point {
+  return { x: r.x0 + 320, y: r.y0 + 320 };
 }

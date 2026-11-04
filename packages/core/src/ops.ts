@@ -66,6 +66,36 @@ export const OperationSchemas = {
       y: z.number().optional().describe('Plan y (mm) of the room centre'),
     })
     .describe('Add a new room block in the open space, with a door, a window on an outer wall and fixtures for toilets and kitchens. Drag or move_room it afterwards.'),
+  set_room_position: z
+    .object({ roomId: id('room block'), x: z.number().describe('Plan x (mm) of the block\'s west wall centre line'), y: z.number().describe('Plan y (mm) of its north wall centre line') })
+    .describe('Put a room block at an exact plan position (used by dragging in the app). Prefer move_room or place_room_against in conversation.'),
+  rotate_room: z
+    .object({ roomId: id('room block'), degrees: z.enum(['90', '-90', '180']).default('90') })
+    .describe('Turn a room block about its centre (e.g. make a vertical toilet horizontal). Doors, fixtures and furniture turn with it.'),
+  place_room_against: z
+    .object({
+      roomId: id('room block to move'),
+      targetId: z.string().describe('Room id to put it against, or "outer" for the outer walls'),
+      side: compass.describe('Which side of the target it goes on (for "outer": which outer wall)'),
+      align: z.enum(['north', 'south', 'east', 'west', 'centre', 'keep']).default('keep').describe('Line up this edge with the target\'s same edge, centre on it, or keep the current position along the wall'),
+    })
+    .describe('Move a room block so it sits flush against another room (sharing that wall) or against an outer wall, optionally lined up with an edge. Use this instead of guessing distances.'),
+  add_door_between: z
+    .object({
+      roomA: id('first room'),
+      roomB: id('second room (or the living/open space)'),
+      width: distance.optional().describe("Default 2'6\" for toilets, 3' otherwise"),
+      kind: z.enum(['door', 'opening', 'sliding']).default('door'),
+    })
+    .describe('Add a door on the wall two rooms share, centred on the shared part, opening into the smaller room. Fails if they do not touch.'),
+  edit_door: z
+    .object({
+      openingId: id('door'),
+      opensInto: id('room the leaf should swing into').optional(),
+      flipHinge: z.boolean().optional().describe('Hinge on the other jamb'),
+      width: distance.optional(),
+    })
+    .describe('Change which room a door opens into, which side it is hinged, or its width.'),
   set_room_size: z
     .object({ roomId: id('room block'), width: distance.optional(), depth: distance.optional() })
     .describe('Set the clear width and/or depth of a room block. The sides against walls or other rooms stay put.'),

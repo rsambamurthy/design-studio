@@ -2,9 +2,10 @@
  * Compact, LLM-facing description of the model plus a deterministic reference
  * resolver. The full model is never sent to the LLM.
  */
+import { fixedWallUnder, getWall, parseBlockWallId } from './model';
 import { getCatalogueItem, matchCatalogue, CATALOGUE } from './catalogue';
 import { runChecks } from './checks';
-import { planSideCompass, vectorToCompass, wallDir, type Compass } from './geometry';
+import { planSideCompass, pointOnWall, roomClearRect, vectorToCompass, wallDir, type Compass } from './geometry';
 import { describeNorth, roomSizeText } from './kernel';
 import type { BuildingModel, PlanSide, Room, Wall } from './model';
 import { PLAN_SIDES, boundaryGaps, eastWestIsPlanX, sideToCompass } from './site';
@@ -26,13 +27,14 @@ export function modelSummary(model: BuildingModel): string {
   lines.push(`Design: ${model.name} · ${model.levelName} · revision ${model.revision}`);
   lines.push(`Orientation: ${describeNorth(model)}. Units shown: ${u === 'ft-in' ? 'feet-inches' : 'mm'}. Room sizes are CLEAR (inside face to inside face).`);
   lines.push('');
-  lines.push('ROOMS (id: name, kind, clear size width×depth on plan; walls by compass side):');
+  lines.push('ROOMS (id: name, kind, clear size width×depth on plan; walls by compass side). For blocks, "place" gives the gap from each side\'s outer face to the outer wall\'s inside face, and what it touches or faces on each side (gaps face to face):');
   for (const r of model.rooms) {
     const sides = (['top', 'bottom', 'left', 'right'] as const)
       .map((s) => `${planSideCompass(s, model.northAngle)}=${r.bounds[s]}`)
       .join(' ');
     const what = r.block ? ', movable block' : model.rooms.some((x) => x.block) ? ', open space around the blocks' : '';
     lines.push(`- ${r.id}: ${r.name} (${r.kind}${r.wet ? ', wet' : ''}${what}) ${roomSizeText(model, r)}; walls ${sides}`);
+    if (r.block) lines.push(`    ${blockPlacement(model, r)}`);
   }
   lines.push('');
   lines.push('WALLS (id: runs, thickness, kind, rooms it bounds):');
@@ -46,7 +48,7 @@ export function modelSummary(model: BuildingModel): string {
   lines.push('');
   lines.push('DOORS & WINDOWS (id: label, kind, width, wall):');
   for (const o of model.openings) {
-    lines.push(`- ${o.id}: ${o.label} (${o.kind}, ${formatLength(o.width, u)}) on ${o.wallId}`);
+    lines.push(`- ${o.id}: ${o.label} (${o.kind}, ${formatLength(o.width, u)}) on ${o.wallId}${o.kind === 'door' ? doorInto(model, o) : ''}`);
   }
   lines.push('');
   lines.push('FURNITURE (id: label, catalogue, room):');
@@ -178,4 +180,67 @@ export function siteSummary(model: BuildingModel): string {
     `Trees (id: label): ${site.trees.length ? site.trees.map((t) => `${t.id}: ${t.label}${t.keep ? ' (keep)' : ''}`).join('; ') : 'none'}.`,
   ];
   return lines.join('\n');
+}
+
+/**
+ * Where a block sits, in words the assistant can act on: on each compass side,
+ * the gap to the outer wall's inside face, and the nearest room it touches or
+ * faces with the gap between faces.
+ */
+export function blockPlacement(model: BuildingModel, r: Room): string {
+  const b = r.block!;
+  const u = model.displayUnits;
+  const ext = model.walls.filter((w) => w.kind === 'external');
+  const xs = ext.flatMap((w) => [w.a.x, w.b.x]);
+  const ys = ext.flatMap((w) => [w.a.y, w.b.y]);
+  const E = ext[0]?.thickness ?? 230;
+  const shell = { x0: Math.min(...xs) + E / 2, x1: Math.max(...xs) - E / 2, y0: Math.min(...ys) + E / 2, y1: Math.max(...ys) - E / 2 };
+  const t = b.thickness / 2;
+  const face = { top: b.y0 - t, bottom: b.y1 + t, left: b.x0 - t, right: b.x1 + t };
+  const parts: string[] = [];
+  for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+    const compass = planSideCompass(side, model.northAngle);
+    const onWall = !!fixedWallUnder(model, r, side);
+    const toOuter = Math.max(0, Math.round(side === 'top' ? face.top - shell.y0 : side === 'bottom' ? shell.y1 - face.bottom : side === 'left' ? face.left - shell.x0 : shell.x1 - face.right));
+    // Nearest block in front of this side.
+    let near: { name: string; gap: number } | undefined;
+    for (const o of model.rooms) {
+      if (o.id === r.id || !o.block) continue;
+      const ob = o.block;
+      const ot = ob.thickness / 2;
+      const horizontal = side === 'top' || side === 'bottom';
+      const overlap = horizontal ? Math.min(b.x1, ob.x1) - Math.max(b.x0, ob.x0) : Math.min(b.y1, ob.y1) - Math.max(b.y0, ob.y0);
+      if (overlap <= 50) continue;
+      let gap: number;
+      if (side === 'top') gap = b.y0 - ob.y1;
+      else if (side === 'bottom') gap = ob.y0 - b.y1;
+      else if (side === 'left') gap = b.x0 - ob.x1;
+      else gap = ob.x0 - b.x1;
+      if (gap < -2) continue;
+      // Face to face (shared line = 0).
+      const g = Math.max(0, Math.round(gap - t - ot));
+      if (!near || g < near.gap) near = { name: o.name, gap: gap <= 2 ? 0 : g };
+    }
+    let txt = `${compass}: `;
+    txt += onWall ? 'on the outer wall' : `${formatLength(toOuter, u)} to outer wall`;
+    if (near && (!onWall || near.gap === 0)) txt += near.gap === 0 ? `, shares wall with ${near.name}` : `, ${formatLength(near.gap, u)} to ${near.name}`;
+    parts.push(txt);
+  }
+  return `place: ${parts.join('; ')}`;
+}
+
+/** ", opens into X" for a door on a block's wall. */
+function doorInto(model: BuildingModel, o: { wallId: string; offset: number; swingSide: 'left' | 'right' }): string {
+  const p = parseBlockWallId(o.wallId);
+  if (!p) return '';
+  const owner = model.rooms.find((r) => r.id === p.roomId);
+  if (!owner) return '';
+  const w = getWall(model, o.wallId);
+  const d = wallDir(w);
+  const side = o.swingSide === 'left' ? 1 : -1;
+  const n = { x: d.y * side, y: -d.x * side };
+  const at = pointOnWall(w, o.offset);
+  const c = roomClearRect(model, owner);
+  const inward = ((c.x0 + c.x1) / 2 - at.x) * n.x + ((c.y0 + c.y1) / 2 - at.y) * n.y > 0;
+  return inward ? `, opens into ${owner.name}` : `, opens out of ${owner.name}`;
 }
