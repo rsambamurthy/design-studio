@@ -96,6 +96,22 @@ function planOps(model: BuildingModel, s: string): Operation[] {
     return [parseOperation('add_toilet', { roomId: r.id })];
   }
 
+  // "add a bedroom" / "add a bathroom" / "add the stairs"
+  if ((m = s.match(/^add\s+(?:a\s+|an\s+|the\s+)?(bedroom|bathroom|toilet|kitchen|lobby|store|pooja(?: room)?|utility|stairs?|staircase|lift)$/))) {
+    const w = m[1]!;
+    if (/^stair/.test(w)) return [parseOperation('add_stair', { roomId: (model.rooms.find((r) => r.kind === 'lobby') ?? model.rooms.find((r) => r.kind === 'living'))!.id })];
+    if (w === 'lift') return [parseOperation('add_lift', { roomId: (model.rooms.find((r) => r.kind === 'lobby') ?? model.rooms.find((r) => r.kind === 'living'))!.id })];
+    const kind = w === 'bathroom' ? 'toilet' : w === 'store' ? 'other' : w === 'utility' ? 'service' : w.startsWith('pooja') ? 'pooja' : w;
+    return [parseOperation('add_room', { kind })];
+  }
+
+  // "make bed 1 13' by 11'" (width by depth)
+  if ((m = s.match(new RegExp(String.raw`^(?:make|set|size)\s+(?:the\s+)?(.+?)\s+(?:to\s+)?${LEN}\s*(?:by|x|×)\s*${LEN}$`)))) {
+    const r = findEntities(model, m[1]!).find((e) => e.type === 'room');
+    if (!r) throw new Error(`Which room is "${m[1]}"?`);
+    return [parseOperation('set_room_size', { roomId: r.id, width: m[2]!.trim(), depth: m[3]!.trim() })];
+  }
+
   // "make toilet 2 a store" / "turn toilet 2 into a pooja room"
   if ((m = s.match(/^(?:make|turn|convert)\s+(?:the\s+)?(.+?)\s+(?:into\s+)?(?:a\s+|an\s+)?(store|pooja(?: room)?|utility|study|wash)$/))) {
     const r = findEntities(model, m[1]!).find((e) => e.type === 'room');
@@ -144,7 +160,9 @@ function planOps(model: BuildingModel, s: string): Operation[] {
   }
 
   if ((m = s.match(/^(?:remove|delete)\s+(.+)$/))) {
-    return [parseOperation('remove', { entityId: resolve(model, m[1]!).id })];
+    const t = resolve(model, m[1]!);
+    if (t.type === 'room') return [parseOperation('remove_room', { roomId: t.id })];
+    return [parseOperation('remove', { entityId: t.id })];
   }
 
   return [];

@@ -42,20 +42,33 @@ interface Props {
   issues: Issue[];
   /** Enables dragging; called once per finished drag. */
   onEdit?: (request: string, ops: EditOp[]) => void;
+  /** A block from the palette dropped (or tapped) at a plan point. */
+  onPlace?: (kind: string, p: Vec) => void;
+  /** Kind being placed by tapping (palette chip tapped), if any. */
+  placing?: string | null;
+  selectedId?: string | null;
+  onSelect?: (roomId: string | null) => void;
 }
 
 const PAD = 1800;
 const INCH = 25.4;
 
-export default function PlanView({ model, changedIds, issues, onEdit }: Props) {
+export default function PlanView({ model, changedIds, issues, onEdit, onPlace, placing, selectedId, onSelect }: Props) {
   const bounds = useMemo(() => {
     const xs = model.walls.flatMap((w) => [w.a.x, w.b.x]);
     const ys = model.walls.flatMap((w) => [w.a.y, w.b.y]);
     return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
   }, [model.walls]);
   return (
-    <ZoomSvg bounds={bounds} pad={PAD} label={`Plan of ${model.name}`} editable={!!onEdit}>
-      <PlanContent model={model} changedIds={changedIds} issues={issues} onEdit={onEdit} bounds={bounds} />
+    <ZoomSvg
+      bounds={bounds}
+      pad={PAD}
+      label={`Plan of ${model.name}`}
+      editable={!!onEdit}
+      onDropData={onEdit && onPlace ? (data, p) => onPlace(data, p) : undefined}
+      onTap={onEdit ? (p) => (placing && onPlace ? onPlace(placing, p) : onSelect?.(null)) : undefined}
+    >
+      <PlanContent model={model} changedIds={changedIds} issues={issues} onEdit={onEdit} bounds={bounds} selectedId={selectedId} onSelect={onSelect} />
     </ZoomSvg>
   );
 }
@@ -65,7 +78,7 @@ function snap(v: number): number {
   return Math.round(v / INCH) * INCH;
 }
 
-function PlanContent({ model, changedIds, issues, onEdit, bounds }: Props & { bounds: { x0: number; y0: number; x1: number; y1: number } }) {
+function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, onSelect }: Props & { bounds: { x0: number; y0: number; x1: number; y1: number } }) {
   const begin = useDrag();
   const [preview, setPreview] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const u = model.displayUnits;
@@ -182,6 +195,10 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds }: Props & { bo
     if (r.block) {
       startDrag(e, `room:${r.id}`, free, (v) => {
         setGrab(null);
+        if (Math.abs(v.x) < INCH && Math.abs(v.y) < INCH) {
+          onSelect?.(r.id);
+          return;
+        }
         const target = dropOn(r.id, { x: from.x + v.x, y: from.y + v.y });
         if (target) {
           onEdit(`Moved ${r.name} to where ${target.name} is`, [{ op: 'swap_rooms', args: { roomA: r.id, roomB: target.id } }]);
@@ -280,6 +297,14 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds }: Props & { bo
       {dropTarget && (() => {
         const c = roomClearRect(model, dropTarget);
         return <rect x={c.x0} y={c.y0} width={c.x1 - c.x0} height={c.y1 - c.y0} className="drop-target" />;
+      })()}
+
+      {/* Selected room */}
+      {selectedId && (() => {
+        const r = model.rooms.find((x) => x.id === selectedId);
+        if (!r) return null;
+        const c = roomClearRect(model, r);
+        return <rect x={c.x0} y={c.y0} width={c.x1 - c.x0} height={c.y1 - c.y0} className="room-selected" transform={shift(`room:${r.id}`)} />;
       })()}
 
       {/* Room labels, scaled to fit small rooms, with a halo for legibility.

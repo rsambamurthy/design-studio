@@ -87,14 +87,14 @@ function snapLines(model: BuildingModel, room: Room): { xs: number[]; ys: number
 }
 
 /** Nudge a block so a side lands on a nearby wall line. Returns the shift applied. */
-export function snapBlock(model: BuildingModel, room: Room): { dx: number; dy: number } {
+export function snapBlock(model: BuildingModel, room: Room, within = BLOCK_SNAP): { dx: number; dy: number } {
   const b = room.block!;
   const { xs, ys } = snapLines(model, room);
   const best = (edges: number[], lines: number[]) => {
     let pick = 0;
-    let dist = BLOCK_SNAP + 1;
+    let dist = within + 1;
     for (const e of edges) for (const l of lines) if (Math.abs(l - e) < dist) [dist, pick] = [Math.abs(l - e), l - e];
-    return dist <= BLOCK_SNAP ? pick : 0;
+    return dist <= within ? pick : 0;
   };
   const dx = Math.round(best([b.x0, b.x1], xs));
   const dy = Math.round(best([b.y0, b.y1], ys));
@@ -278,4 +278,25 @@ export function blocksOverlap(model: BuildingModel, a: Room, b: Room, tol = 5): 
   const ra = roomClearRect(model, a);
   const rb = roomClearRect(model, b);
   return ra.x0 < rb.x1 - tol && ra.x1 > rb.x0 + tol && ra.y0 < rb.y1 - tol && ra.y1 > rb.y0 + tol;
+}
+
+/**
+ * Make a block's clear size w × h, moving only sides that are free (not on a
+ * fixed wall or against another block); if both sides on an axis are held, the
+ * far side (right/bottom) gives.
+ */
+export function setBlockClearSize(model: BuildingModel, room: Room, w?: number, h?: number) {
+  const anchored = (sd: PlanSide) => !!fixedWallUnder(model, room, sd) || coincidentSides(model, room, sd).length > 0;
+  const fix = (axis: 'x' | 'y', target?: number) => {
+    if (target === undefined) return;
+    const r = roomClearRect(model, room);
+    const have = axis === 'x' ? r.x1 - r.x0 : r.y1 - r.y0;
+    const delta = Math.round(target - have);
+    if (Math.abs(delta) < 1) return;
+    const [lo, hi] = axis === 'x' ? (['left', 'right'] as const) : (['top', 'bottom'] as const);
+    const side = anchored(hi) && !anchored(lo) ? lo : hi;
+    resizeBlockSide(model, room, side, side === lo ? -delta : delta);
+  };
+  fix('x', w);
+  fix('y', h);
 }

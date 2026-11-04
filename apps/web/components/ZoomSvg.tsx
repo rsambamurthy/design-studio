@@ -8,7 +8,7 @@
  * Children can start an element drag via useDrag(): the frame then reports the
  * pointer movement in model units instead of panning.
  */
-import { createContext, useCallback, useContext, useRef, useState, type PointerEvent, type ReactNode, type WheelEvent } from 'react';
+import { createContext, useCallback, useContext, useRef, useState, type DragEvent, type PointerEvent, type ReactNode, type WheelEvent } from 'react';
 
 interface Bounds {
   x0: number;
@@ -39,12 +39,18 @@ export default function ZoomSvg({
   pad,
   label,
   editable = false,
+  onDropData,
+  onTap,
   children,
 }: {
   bounds: Bounds;
   pad: number;
   label: string;
   editable?: boolean;
+  /** Something dragged in from outside (e.g. a room block from the palette) was dropped at a plan point. */
+  onDropData?: (data: string, p: Vec) => void;
+  /** A tap or click on the plan that wasn't a drag. */
+  onTap?: (p: Vec) => void;
   children: ReactNode;
 }) {
   const base = { w: bounds.x1 - bounds.x0 + pad * 2, h: bounds.y1 - bounds.y0 + pad * 2 };
@@ -62,6 +68,7 @@ export default function ZoomSvg({
   const ref = useRef<SVGSVGElement>(null);
   const panFrom = useRef<{ x: number; y: number } | null>(null);
   const drag = useRef<{ start: Vec; h: DragHandlers } | null>(null);
+  const downAt = useRef<{ x: number; y: number; moved: boolean } | null>(null);
 
   const toModel = (clientX: number, clientY: number): Vec => {
     const svg = ref.current;
@@ -77,9 +84,11 @@ export default function ZoomSvg({
 
   const down = (e: PointerEvent<SVGSVGElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
+    downAt.current = { x: e.clientX, y: e.clientY, moved: false };
     if (!drag.current) panFrom.current = { x: e.clientX, y: e.clientY };
   };
   const move = (e: PointerEvent<SVGSVGElement>) => {
+    if (downAt.current && Math.hypot(e.clientX - downAt.current.x, e.clientY - downAt.current.y) > 5) downAt.current.moved = true;
     if (drag.current) {
       const p = toModel(e.clientX, e.clientY);
       drag.current.h.move({ x: p.x - drag.current.start.x, y: p.y - drag.current.start.y });
@@ -93,13 +102,26 @@ export default function ZoomSvg({
     pan(-dx, -dy);
   };
   const up = (e: PointerEvent<SVGSVGElement>) => {
+    const tap = downAt.current && !downAt.current.moved;
+    downAt.current = null;
     if (drag.current) {
       const p = toModel(e.clientX, e.clientY);
       const d = drag.current;
       drag.current = null;
       d.h.end({ x: p.x - d.start.x, y: p.y - d.start.y });
+    } else if (tap && onTap) {
+      onTap(toModel(e.clientX, e.clientY));
     }
     panFrom.current = null;
+  };
+  const dragOver = (e: DragEvent<SVGSVGElement>) => {
+    if (onDropData) e.preventDefault();
+  };
+  const drop = (e: DragEvent<SVGSVGElement>) => {
+    if (!onDropData) return;
+    e.preventDefault();
+    const data = e.dataTransfer.getData('text/plain');
+    if (data) onDropData(data, toModel(e.clientX, e.clientY));
   };
   const cancel = () => {
     if (drag.current) {
@@ -133,6 +155,8 @@ export default function ZoomSvg({
         onPointerUp={up}
         onPointerCancel={cancel}
         onWheel={wheel}
+        onDragOver={dragOver}
+        onDrop={drop}
         role="img"
         aria-label={label}
       >

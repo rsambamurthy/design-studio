@@ -312,3 +312,29 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .plan-svg .block-wall.hot { fill: var(--theme-accent); }
 .plan-svg.editable g.drag:hover .block-wall { fill: var(--theme-primary); }
 .plan-svg .block-ghost { fill: rgba(49, 46, 129, .10); stroke: var(--theme-primary); stroke-width: 60; stroke-dasharray: 220 140; pointer-events: none; }
+
+/* ---------- Room block palette ---------- */
+.palette { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; }
+.palette-title { font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--color-muted); margin-right: 4px; }
+.block-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: var(--radius-pill); border: 1px solid var(--color-border, #e5e7eb); background: #fff; font-size: 12.5px; font-weight: 600; color: var(--color-text); cursor: grab; user-select: none; }
+.block-chip:hover { border-color: var(--theme-primary); }
+.block-chip:active { cursor: grabbing; }
+.block-chip.on { background: var(--theme-primary); border-color: var(--theme-primary); color: #fff; }
+.block-swatch { width: 10px; height: 10px; border-radius: 2px; background: #cbd5e1; box-shadow: inset 0 0 0 2px #475569; }
+.block-chip::before { content: '⠿'; font-size: 13px; color: var(--color-muted); margin-right: -2px; }
+.block-chip.on::before { color: #fff; }
+.block-chip.toilet .block-swatch, .block-chip.kitchen .block-swatch { background: #bfdbfe; }
+.block-chip.stair .block-swatch, .block-chip.lift .block-swatch { background: #c7d2fe; }
+.block-chip.bedroom .block-swatch, .block-chip.lobby .block-swatch { background: #fff; }
+.placing-hint { margin: -4px 0 8px; font-size: 13px; color: var(--theme-primary); font-weight: 600; }
+.link-btn { background: none; border: 0; padding: 0 4px; color: var(--theme-primary); font-weight: 600; text-decoration: underline; cursor: pointer; font-size: inherit; }
+.plan-svg .room-selected { fill: none; stroke: var(--theme-primary); stroke-width: 70; stroke-dasharray: 260 130; pointer-events: none; }
+
+/* ---------- Selected room editor ---------- */
+.room-editor { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; margin-top: 10px; padding: 12px 14px; border: 1px solid var(--color-border, #e5e7eb); border-radius: 12px; background: #fafaff; }
+.room-editor label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; font-weight: 700; color: var(--color-muted); text-transform: uppercase; letter-spacing: .03em; }
+.room-editor input { width: 120px; }
+.room-editor label:first-child input { width: 160px; }
+.room-editor-btns { display: flex; gap: 8px; align-items: center; }
+.room-editor-hint { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--color-muted); }
+.shell-hint { margin: 4px 0 0; font-size: 13px; color: var(--color-muted); }

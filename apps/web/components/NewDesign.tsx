@@ -26,7 +26,7 @@ function Thumb({ model }: { model: BuildingModel }) {
 export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<string, unknown>) => Promise<void>; busy: boolean }) {
   const models = useMemo(() => Object.fromEntries(TEMPLATES.map((t) => [t.id, t.build()])), []);
   const [name, setName] = useState('');
-  const [template, setTemplate] = useState('auto');
+  const [template, setTemplate] = useState('shell');
   const [withPlot, setWithPlot] = useState(true);
   // Default plot: 60' east–west × 40' north–south (edit freely).
   const [ew, setEw] = useState("60'");
@@ -72,7 +72,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
       return siteOps;
   }
 
-  const counts = () => ({ ...(template === 'auto' && bedrooms ? { bedrooms } : {}), ...(toilets ? { toilets } : {}), ...(core ? { core } : {}) });
+  const counts = () => (template === 'shell' ? {} : { ...(template === 'auto' && bedrooms ? { bedrooms } : {}), ...(toilets ? { toilets } : {}), ...(core ? { core } : {}) });
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -105,6 +105,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
         const beds = r.model.rooms.filter((x) => x.kind === 'bedroom').length;
         const wcs = r.model.rooms.filter((x) => x.kind === 'toilet').length;
         const layout = r.notes[0]?.replace(/^Started from /, '').replace(/, chosen for .*$/, '') ?? '';
+        if (template === 'shell') return { text: `${head} → bare shell; drag the rooms in after`, bad: false };
         const kinds = (r.model.cores ?? []).map((c) => c.kind);
         const coreText = kinds.includes('lift') ? ', stair + lift' : kinds.includes('stair') ? ', stair' : '';
         return { text: `${head} → ${layout}: ${beds} bedroom${beds === 1 ? '' : 's'}, ${wcs} toilet${wcs === 1 ? '' : 's'}${coreText}`, bad: false };
@@ -121,21 +122,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
     return `${formatLength(r.x1 - r.x0, 'ft-in')} × ${formatLength(r.y1 - r.y0, 'ft-in')} outside`;
   };
 
-  return (
-    <form className="card new-design" onSubmit={submit}>
-      <div className="card-title">New design</div>
-
-      <label className="nd-label" htmlFor="nd-name">Name</label>
-      <input id="nd-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ground floor – option 1" aria-label="Design name" maxLength={120} />
-
-      <div className="nd-label">Start from</div>
-      <div className="tpl-grid" role="radiogroup" aria-label="Starting layout">
-        <button type="button" role="radio" aria-checked={template === 'auto'} className={`tpl-card auto ${template === 'auto' ? 'on' : ''}`} onClick={() => setTemplate('auto')}>
-          <span className="tpl-auto-mark" aria-hidden="true">✦</span>
-          <span className="tpl-name">Best fit for this plot</span>
-          <span className="tpl-desc">Picks 1, 2 or 3 BHK from the plinth size and turns it to suit the plot&apos;s shape.</span>
-        </button>
-        {TEMPLATES.map((t) => (
+  const card = (t: (typeof TEMPLATES)[number]) => (
           <button
             type="button"
             key={t.id}
@@ -147,17 +134,37 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
             <Thumb model={models[t.id]!} />
             <span className="tpl-name">{t.name}</span>
             <span className="tpl-desc">{t.description}</span>
-            <span className="tpl-size">{withPlot ? 'sized to your plinth' : `default ${tplSize(t.id)}`}</span>
-          </button>
-        ))}
+            <span className="tpl-size">{t.id === 'shell' ? (withPlot ? 'walls sized to your plinth' : `default ${tplSize(t.id)}`) : withPlot ? 'sized to your plinth' : `default ${tplSize(t.id)}`}</span>
+          </button>);
+
+  return (
+    <form className="card new-design" onSubmit={submit}>
+      <div className="card-title">New design</div>
+
+      <label className="nd-label" htmlFor="nd-name">Name</label>
+      <input id="nd-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ground floor – option 1" aria-label="Design name" maxLength={120} />
+
+      <div className="nd-label">Start from</div>
+      <div className="tpl-grid" role="radiogroup" aria-label="Starting layout">
+        {TEMPLATES.filter((t) => t.id === 'shell').map((t) => card(t))}
+        <button type="button" role="radio" aria-checked={template === 'auto'} className={`tpl-card auto ${template === 'auto' ? 'on' : ''}`} onClick={() => setTemplate('auto')}>
+          <span className="tpl-auto-mark" aria-hidden="true">✦</span>
+          <span className="tpl-name">Best fit for this plot</span>
+          <span className="tpl-desc">Picks 1, 2 or 3 BHK from the plinth size and turns it to suit the plot&apos;s shape.</span>
+        </button>
+        {TEMPLATES.filter((t) => t.id !== 'shell').map((t) => card(t))}
       </div>
 
+      {template === 'shell' ? (
+        <p className="nd-hint shell-hint">You&apos;ll get the outer walls sized to your plinth. Then drag bedrooms, bathrooms, kitchen, lobby, stairs and lift into it and set each one&apos;s size.</p>
+      ) : (
       <div className="nd-rooms">
         <div>
           <div className="nd-label">Bedrooms</div>
           <div className="chips" role="radiogroup" aria-label="Bedrooms">
             {[0, 1, 2, 3].map((n) => {
               const fixed = template !== 'auto';
+              if (template === 'shell') return null;
               const on = fixed ? n === Number(template[0]) : bedrooms === n;
               return (
                 <button type="button" key={n} role="radio" aria-checked={on} className={`chip ${on ? 'on' : ''}`} disabled={fixed} onClick={() => setBedrooms(n)}>
@@ -189,6 +196,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
         </div>
         <p className="nd-hint">The stair and lift are walled units you can drag anywhere afterwards. Extra toilets are attached to bedrooms (largest first), then a common toilet off the living area. Fewer turns the common toilet into a store.</p>
       </div>
+      )}
 
       <label className="nd-check">
         <input type="checkbox" checked={withPlot} onChange={(e) => setWithPlot(e.target.checked)} /> Enter the plot details now

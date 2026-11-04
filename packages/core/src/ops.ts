@@ -56,14 +56,20 @@ export const OperationSchemas = {
     .describe('Move a room (bedroom, toilet, lobby, kitchen…) as a block, with its walls, doors, furniture, stairs and lifts. It lines up with a wall when close. The open living space adjusts around it.'),
   add_room: z
     .object({
-      name: z.string().min(1),
+      name: z.string().min(1).optional().describe('Default from the kind: Bed 2, Toilet 3, Kitchen…'),
       kind: z.enum(['bedroom', 'toilet', 'kitchen', 'service', 'living', 'dining', 'balcony', 'lobby', 'pooja', 'stair', 'lift', 'other']),
-      width: distance.describe('Clear width'),
-      depth: distance.describe('Clear depth'),
+      width: distance.optional().describe('Clear width (plan east–west when north is up); default by kind'),
+      depth: distance.optional().describe('Clear depth; default by kind'),
       inRoomId: id('open room to place it in (default: living/dining)').optional(),
       corner: z.enum(['north-west', 'north-east', 'south-west', 'south-east']).optional(),
+      x: z.number().optional().describe('Plan x (mm) of the room centre, when dropped at a point'),
+      y: z.number().optional().describe('Plan y (mm) of the room centre'),
     })
-    .describe('Add a new room block in free open space (against an outer wall). Drag or move_room it afterwards.'),
+    .describe('Add a new room block in the open space, with a door, a window on an outer wall and fixtures for toilets and kitchens. Drag or move_room it afterwards.'),
+  set_room_size: z
+    .object({ roomId: id('room block'), width: distance.optional(), depth: distance.optional() })
+    .describe('Set the clear width and/or depth of a room block. The sides against walls or other rooms stay put.'),
+  remove_room: z.object({ roomId: id('room block') }).describe('Remove a room block, with its doors, furniture and fixtures; its space returns to the open area.'),
   fit_out: z.object({ roomId: id('toilet or kitchen') }).describe('Add the standard fixtures: WC, wash basin (and shower when there is room) in a toilet; counter with sink and hob in a kitchen.'),
   set_room_use: z
     .object({
@@ -103,19 +109,23 @@ export const OperationSchemas = {
   // ---------- Stair and lift ----------
   add_stair: z
     .object({
-      roomId: id('room to put the stair in'),
+      roomId: id('room to put the stair in (default: the room at x, y)').optional(),
       type: z.enum(['dog-legged', 'straight']).default('dog-legged'),
       flightWidth: distance.optional().describe('Clear width of each flight (default 3\'6")'),
       floorHeight: distance.optional().describe('Floor-to-floor height (default 10\')'),
       corner: z.enum(['north-west', 'north-east', 'south-west', 'south-east']).optional(),
       enclosed: z.boolean().default(true).describe('Give it its own walls (default); false for an open stair'),
+      x: z.number().optional().describe('Plan x (mm) of its centre, when dropped at a point'),
+      y: z.number().optional(),
     })
     .describe('Add a staircase as its own walled unit, in a corner of a room (first corner where it fits if not given). It can be moved anywhere afterwards.'),
   add_lift: z
     .object({
-      roomId: id('room to put the lift in'),
+      roomId: id('room to put the lift in (default: the room at x, y)').optional(),
       persons: z.enum(['4', '6', '8']).default('6').describe('Lift capacity'),
       corner: z.enum(['north-west', 'north-east', 'south-west', 'south-east']).optional(),
+      x: z.number().optional().describe('Plan x (mm) of its centre, when dropped at a point'),
+      y: z.number().optional(),
     })
     .describe('Add a lift as its own walled shaft with a door, in a corner of a room. It can be moved anywhere afterwards.'),
   move_core: z.object({ coreId: id('stair or lift'), direction: compass, distance }).describe('Move a stair or lift (with its walls), within its room or into another room. Snaps flush to a wall when close.'),

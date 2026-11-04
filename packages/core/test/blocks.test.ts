@@ -103,7 +103,7 @@ describe('room blocks', () => {
 
 describe('fixtures', () => {
   it('starting layouts have a WC and basin in each toilet and a counter in the kitchen', () => {
-    for (const t of TEMPLATES) {
+    for (const t of TEMPLATES.filter((x) => x.id !== 'shell')) {
       const m = t.build();
       for (const r of m.rooms.filter((x) => x.kind === 'toilet')) {
         expect(m.furniture.some((f) => f.roomId === r.id && f.catalogueId === 'wc-floor'), `${t.id} ${r.name}`).toBe(true);
@@ -124,5 +124,72 @@ describe('fixtures', () => {
   it('fit_out refuses a room that already has fixtures', () => {
     const m = three();
     expect(() => apply(m, 'fit_out', { roomId: room(m, 'Toilet 1').id })).toThrow(/already has fixtures/);
+  });
+});
+
+describe('bare shell and dropped blocks', () => {
+  const shellAt = () => startDesign('shell', [op('set_plot', { eastWest: "60'", northSouth: "40'" }), op('set_setback', { side: 'all', distance: "5'" })], 'S').model;
+
+  it('starts with only the outer walls, sized to the plinth', () => {
+    const m = shellAt();
+    expect(m.walls).toHaveLength(4);
+    expect(m.rooms.map((r) => r.kind)).toEqual(['living']);
+    expect(m.cores ?? []).toEqual([]);
+  });
+
+  it('drops a bedroom at a point: snapped to the outer wall, with a door and a window', () => {
+    const m = shellAt();
+    const r = apply(m, 'add_room', { kind: 'bedroom', x: 2000, y: 2000 });
+    const bed = room(r.model, 'Bed 1');
+    expect(bed.block!.x0).toBe(0);
+    expect(bed.block!.y0).toBe(0);
+    expect(r.model.openings.some((o) => o.label === 'Bed 1 door')).toBe(true);
+    expect(r.model.openings.some((o) => o.label === 'Bed 1 window')).toBe(true);
+    expect(errors(r.model)).toEqual([]);
+    const c = roomClearRect(r.model, bed);
+    expect([Math.round(c.x1 - c.x0), Math.round(c.y1 - c.y0)]).toEqual([3353, 3658]);
+  });
+
+  it('a dropped bathroom comes with a WC and basin', () => {
+    const m = apply(shellAt(), 'add_room', { kind: 'toilet', x: 500, y: 9000 }).model;
+    const t = room(m, 'Toilet 1');
+    expect(m.furniture.filter((f) => f.roomId === t.id).map((f) => f.catalogueId).sort()).toEqual(['wash-basin', 'wc-floor']);
+  });
+
+  it('stairs dropped on a room too small for them stand in the open space', () => {
+    let m = apply(shellAt(), 'add_room', { kind: 'lobby', x: 13000, y: 7000 }).model;
+    const lobby = room(m, 'Lobby');
+    const lr = roomClearRect(m, lobby);
+    m = apply(m, 'add_stair', { x: (lr.x0 + lr.x1) / 2, y: (lr.y0 + lr.y1) / 2 }).model;
+    expect(m.cores![0]!.roomId).toBe(room(m, 'Living / Dining').id);
+  });
+
+  it('stairs and lift drop at a point', () => {
+    let m = apply(shellAt(), 'add_room', { kind: 'lobby', x: 13000, y: 7000 }).model;
+    const lobby = room(m, 'Lobby');
+    m = apply(m, 'add_stair', { x: 7000, y: 7000 }).model;
+    m = apply(m, 'add_lift', { x: 9000, y: 2000 }).model;
+    expect(m.cores!.map((c) => c.kind).sort()).toEqual(['lift', 'stair']);
+    expect(errors(m)).toEqual([]);
+    expect(lobby).toBeTruthy();
+  });
+
+  it('typed sizes keep the sides against walls', () => {
+    const m = apply(shellAt(), 'add_room', { kind: 'bedroom', x: 2000, y: 2000 }).model;
+    const bed = room(m, 'Bed 1');
+    const r = apply(m, 'set_room_size', { roomId: bed.id, width: "13'", depth: "11'" });
+    const c = roomClearRect(r.model, room(r.model, 'Bed 1'));
+    expect(Math.round(c.x1 - c.x0)).toBe(3962);
+    expect(Math.round(c.y1 - c.y0)).toBe(3353);
+    expect(room(r.model, 'Bed 1').block!.x0).toBe(0);
+    expect(r.summary).toMatch(/13'0" × 11'0"/);
+  });
+
+  it('removing a room returns its space', () => {
+    const m = apply(shellAt(), 'add_room', { kind: 'toilet', x: 500, y: 9000 }).model;
+    const r = apply(m, 'remove_room', { roomId: room(m, 'Toilet 1').id });
+    expect(r.model.rooms.map((x) => x.kind)).toEqual(['living']);
+    expect(r.model.furniture).toEqual([]);
+    expect(r.model.openings).toEqual([]);
   });
 });

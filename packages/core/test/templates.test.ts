@@ -17,7 +17,7 @@ describe('templates', () => {
     const m = t.build();
     const bad = runChecks(m).filter((i) => i.severity !== 'advisory');
     expect(bad).toEqual([]);
-    expect(m.rooms.length).toBeGreaterThanOrEqual(5);
+    expect(m.rooms.length).toBeGreaterThanOrEqual(t.id === 'shell' ? 1 : 5);
   });
 
   it('every template has unique ids', () => {
@@ -38,7 +38,7 @@ describe('fit_to_buildable', () => {
   ];
 
   it('makes the 3BHK fill the Vaidyas buildable area exactly, with no setback errors', () => {
-    const m = run(TEMPLATES[0]!.build(), ...vaidyasSite, ['fit_to_buildable', {}]);
+    const m = run(TEMPLATES.find((t) => t.id === '3bhk')!.build(), ...vaidyasSite, ['fit_to_buildable', {}]);
     const r = buildingOuterRect(m);
     expect(Math.abs(r.x1 - r.x0 - 16002)).toBeLessThanOrEqual(2); // 52'6"
     expect(Math.abs(r.y1 - r.y0 - 10668)).toBeLessThanOrEqual(2); // 35'
@@ -50,7 +50,7 @@ describe('fit_to_buildable', () => {
   });
 
   it('keeps wall thicknesses and door widths', () => {
-    const before = TEMPLATES[0]!.build();
+    const before = TEMPLATES.find((t) => t.id === '3bhk')!.build();
     const m = run(before, ...vaidyasSite, ['fit_to_buildable', {}]);
     expect(m.walls.map((w) => w.thickness)).toEqual(before.walls.map((w) => w.thickness));
     expect(m.openings.find((o) => o.id === 'd-main')!.width).toBe(before.openings.find((o) => o.id === 'd-main')!.width);
@@ -58,7 +58,7 @@ describe('fit_to_buildable', () => {
 
   it('refuses to stretch a 1BHK across a very large plot', () => {
     expect(() =>
-      run(TEMPLATES[2]!.build(), ['set_plot', { eastWest: "150'", northSouth: "100'" }], ['fit_to_buildable', {}]),
+      run(TEMPLATES.find((t) => t.id === '1bhk')!.build(), ['set_plot', { eastWest: "150'", northSouth: "100'" }], ['fit_to_buildable', {}]),
     ).toThrow(/too different/);
   });
 

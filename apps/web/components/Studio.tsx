@@ -94,6 +94,8 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const [redo, setRedo] = useState<number[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [placing, setPlacing] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
   const [viewing, setViewing] = useState<{ number: number; model: BuildingModel } | null>(null);
   const [compare, setCompare] = useState<number[]>([]);
   const [shares, setShares] = useState<Share[] | null>(null);
@@ -104,6 +106,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const logRef = useRef<HTMLDivElement>(null);
 
   const model = viewing?.model ?? design.model;
+  const selectedRoom = model.rooms.find((r) => r.id === selected && r.block);
   const current = design.revisions.find((r) => r.number === design.currentRev);
   const issues = useMemo(() => runChecks(model), [model]);
   const counts = {
@@ -157,6 +160,16 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     } finally {
       setBusy(false);
     }
+  }
+
+  /** A block from the palette dropped or tapped onto the plan. */
+  function place(kind: string, p: { x: number; y: number }) {
+    setPlacing(null);
+    const item = PALETTE.find((b) => b.kind === kind);
+    if (!item) return;
+    const at = { x: Math.round(p.x), y: Math.round(p.y) };
+    const op = kind === 'stair' ? { op: 'add_stair', args: at } : kind === 'lift' ? { op: 'add_lift', args: at } : { op: 'add_room', args: { kind, ...at } };
+    void applyOps(`Added a ${item.label.toLowerCase()}`, [op], false);
   }
 
   /** Drag edits on the plan or site: saved like any other change; disabled while viewing old revisions. */
@@ -555,7 +568,56 @@ export default function Studio({ email, initial }: { email: string; initial: Des
           {planMode === 'site' ? (
             <SitePlanView model={model} issues={issues} hot={changed.has('site')} onEdit={dragEdit} />
           ) : (
-            <PlanView model={model} changedIds={changed} issues={issues} onEdit={dragEdit} />
+            <>
+              {!viewing && (
+                <div className="palette" role="toolbar" aria-label="Room blocks">
+                  <span className="palette-title">Drag into the plan</span>
+                  {PALETTE.map((b) => (
+                    <button
+                      key={b.kind}
+                      type="button"
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', b.kind);
+                        e.dataTransfer.effectAllowed = 'copy';
+                      }}
+                      onClick={() => setPlacing((k) => (k === b.kind ? null : b.kind))}
+                      className={`block-chip ${b.kind} ${placing === b.kind ? 'on' : ''}`}
+                      disabled={busy}
+                      title={`Drag a ${b.label.toLowerCase()} into the plan, or tap here and then tap the plan`}
+                    >
+                      <span className="block-swatch" aria-hidden="true" />
+                      {b.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {placing && <p className="placing-hint">Tap the plan where the {PALETTE.find((b) => b.kind === placing)?.label.toLowerCase()} goes. <button className="link-btn" onClick={() => setPlacing(null)}>Cancel</button></p>}
+              <PlanView
+                model={model}
+                changedIds={changed}
+                issues={issues}
+                onEdit={dragEdit}
+                onPlace={dragEdit ? place : undefined}
+                placing={placing}
+                selectedId={selected}
+                onSelect={setSelected}
+              />
+              {selectedRoom && !viewing && (
+                <RoomEditor
+                  key={`${selectedRoom.id}-${design.currentRev}`}
+                  model={model}
+                  room={selectedRoom}
+                  busy={busy}
+                  onApply={(request, ops) => void applyOps(request, ops, false)}
+                  onRemove={() => {
+                    setSelected(null);
+                    void applyOps(`Removed ${selectedRoom.name}`, [{ op: 'remove_room', args: { roomId: selectedRoom.id } }], false);
+                  }}
+                  onClose={() => setSelected(null)}
+                />
+              )}
+            </>
           )}
           <p className={`edit-status ${editStatus?.error ? 'err' : ''}`} role="status">
             {editStatus ? editStatus.text : viewing ? 'Viewing an old revision: go back to current to edit.' : 'Tip: drag a room by its name to move it; drag its walls to resize it. Doors, windows, furniture, stairs and lifts drag too (snaps to 1").'}
@@ -598,4 +660,74 @@ export default function Studio({ email, initial }: { email: string; initial: Des
 
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
+}
+
+/** Room blocks that can be dragged into the plan. */
+const PALETTE = [
+  { kind: 'bedroom', label: 'Bedroom' },
+  { kind: 'toilet', label: 'Bathroom' },
+  { kind: 'kitchen', label: 'Kitchen' },
+  { kind: 'lobby', label: 'Lobby' },
+  { kind: 'stair', label: 'Stairs' },
+  { kind: 'lift', label: 'Lift' },
+  { kind: 'other', label: 'Store' },
+  { kind: 'pooja', label: 'Pooja' },
+];
+
+/** Selected room block: name, clear width and depth, remove. */
+function RoomEditor({
+  model,
+  room,
+  busy,
+  onApply,
+  onRemove,
+  onClose,
+}: {
+  model: BuildingModel;
+  room: BuildingModel['rooms'][number];
+  busy: boolean;
+  onApply: (request: string, ops: OpInput[]) => void;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
+  const c = roomClearRect(model, room);
+  const u = model.displayUnits;
+  const [name, setName] = useState(room.name);
+  const [w, setW] = useState(formatLength(Math.round(c.x1 - c.x0), u));
+  const [h, setH] = useState(formatLength(Math.round(c.y1 - c.y0), u));
+  const apply = (e: FormEvent) => {
+    e.preventDefault();
+    const ops: OpInput[] = [];
+    const wNow = formatLength(Math.round(c.x1 - c.x0), u);
+    const hNow = formatLength(Math.round(c.y1 - c.y0), u);
+    if (w.trim() !== wNow || h.trim() !== hNow) {
+      ops.push({ op: 'set_room_size', args: { roomId: room.id, ...(w.trim() !== wNow ? { width: w.trim() } : {}), ...(h.trim() !== hNow ? { depth: h.trim() } : {}) } });
+    }
+    if (name.trim() && name.trim() !== room.name) ops.push({ op: 'rename_room', args: { roomId: room.id, name: name.trim() } });
+    if (ops.length) onApply(`Changed ${room.name}`, ops);
+  };
+  const ew = model.northAngle === 0 ? ' (E–W)' : '';
+  const ns = model.northAngle === 0 ? ' (N–S)' : '';
+  return (
+    <form className="room-editor" onSubmit={apply} aria-label={`Edit ${room.name}`}>
+      <label>
+        Name
+        <input value={name} onChange={(e) => setName(e.target.value)} aria-label="Room name" />
+      </label>
+      <label>
+        Width{ew}
+        <input value={w} onChange={(e) => setW(e.target.value)} aria-label="Room width" />
+      </label>
+      <label>
+        Depth{ns}
+        <input value={h} onChange={(e) => setH(e.target.value)} aria-label="Room depth" />
+      </label>
+      <div className="room-editor-btns">
+        <button className="btn-primary" type="submit" disabled={busy}>Apply</button>
+        <button className="btn-secondary" type="button" onClick={onRemove} disabled={busy}>Remove room</button>
+        <button className="link-btn" type="button" onClick={onClose}>Close</button>
+      </div>
+      <p className="room-editor-hint">Clear sizes, inside face to inside face. Sides against walls or other rooms stay put.</p>
+    </form>
+  );
 }

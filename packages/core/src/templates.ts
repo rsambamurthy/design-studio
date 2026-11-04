@@ -127,7 +127,37 @@ function threeBhk(): BuildingModel {
   return { ...m, revision: 1 };
 }
 
+/** The bare shell: outer walls only. Rooms are dragged in as blocks. */
+function shell(): BuildingModel {
+  const W = L("48'");
+  const H = L("34'");
+  return {
+    schema: 1,
+    id: 'template-shell',
+    name: 'Bare shell',
+    northAngle: 0,
+    displayUnits: 'ft-in',
+    levelName: 'Typical floor',
+    revision: 1,
+    walls: [
+      wall('w-north', [0, 0], [W, 0], EXT, 'external'),
+      wall('w-south', [0, H], [W, H], EXT, 'external'),
+      wall('w-west', [0, 0], [0, H], EXT, 'external'),
+      wall('w-east', [W, 0], [W, H], EXT, 'external'),
+    ],
+    rooms: [room('r-living', 'Living / Dining', 'living', 'w-north', 'w-south', 'w-west', 'w-east')],
+    openings: [],
+    furniture: [],
+  };
+}
+
 export const TEMPLATES: Template[] = [
+  {
+    id: 'shell',
+    name: 'Bare shell',
+    description: 'Outer walls only. Drag in bedrooms, bathrooms, kitchen, lobby, stairs and lift, then set their sizes.',
+    build: shell,
+  },
   {
     id: '3bhk',
     name: '3BHK flat',

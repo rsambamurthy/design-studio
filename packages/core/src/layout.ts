@@ -130,6 +130,7 @@ export interface RoomCounts {
 
 export function startDesign(templateId: string, siteOps: Operation[], name: string, counts: RoomCounts = {}): StartResult {
   const notes: string[] = [];
+  if (templateId === 'shell') counts = {};
   if (counts.bedrooms && templateId === 'auto') templateId = `${counts.bedrooms}bhk`;
   const auto = templateId === 'auto';
   const first = getTemplate(auto ? '3bhk' : templateId);
