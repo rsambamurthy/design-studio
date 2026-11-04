@@ -181,3 +181,50 @@ a.btn-primary, a.btn-secondary { text-decoration: none; border-radius: var(--rad
   .side-card .chat .chat-log { max-height: 46dvh; }
   .compare-grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- Site ---------- */
+button.tab { background: none; border: none; cursor: pointer; font-family: inherit; }
+.site-panel { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.site-section { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); }
+.site-section > button { align-self: flex-start; }
+.site-head { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--theme-accent); }
+.field-grid { display: grid; gap: 8px; }
+.field-grid.two { grid-template-columns: 1fr 1fr; }
+.field-grid.four { grid-template-columns: repeat(4, 1fr); }
+.field-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--color-muted); min-width: 0; }
+.field-grid input, .field-grid select { width: 100%; min-width: 0; padding: .4rem .5rem; font-size: 13px; }
+.access-row { display: grid; grid-template-columns: 52px 1fr 90px; gap: 6px; align-items: center; font-size: 12.5px; }
+.access-row select, .access-row input { padding: .35rem .5rem; font-size: 12.5px; min-width: 0; }
+.access-side { font-weight: 600; }
+.tree-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.tree-list li { display: flex; justify-content: space-between; align-items: center; }
+.tree-form { display: flex; flex-direction: column; gap: 8px; }
+.tree-form > button { align-self: flex-start; }
+.site-empty { display: grid; place-items: center; min-height: 300px; padding: 24px; text-align: center; color: var(--color-muted); font-size: 14px; }
+
+.plan-svg .plot-band { fill: #fdf3ea; }
+.plan-svg .buildable { fill: #fff; stroke: var(--theme-accent); stroke-width: 40; stroke-dasharray: 240 160; }
+.plan-svg .plot-line { fill: none; stroke: var(--color-text); stroke-width: 90; }
+.plan-svg .plot-line.hot { stroke: var(--theme-accent); }
+.plan-svg .access rect { fill: #e2e8f0; opacity: .75; }
+.plan-svg .access.road rect { fill: #cbd5e1; }
+.plan-svg .access text { fill: #475569; font-weight: 600; font-family: var(--font); }
+.plan-svg .setback-label { fill: #9a5b3c; font-family: var(--font); }
+.plan-svg .tree .canopy { fill: rgba(34, 197, 94, .14); stroke: rgba(22, 163, 74, .5); stroke-width: 30; }
+.plan-svg .tree .protect { fill: none; stroke: #15803d; stroke-width: 30; stroke-dasharray: 90 70; }
+.plan-svg .tree .trunk { fill: #78350f; }
+.plan-svg .tree text { fill: #166534; font-weight: 600; font-family: var(--font); }
+.plan-svg .footprint { fill: #eef2ff; stroke: none; }
+.plan-svg .footprint.hot { fill: #fff4ed; }
+.plan-svg .site-wall { stroke: var(--color-text); }
+.plan-svg .footprint-label { fill: var(--theme-primary); font-weight: 700; font-family: var(--font); paint-order: stroke; stroke: rgba(255,255,255,.85); stroke-width: 70px; }
+.plan-svg .gap line { stroke: #16a34a; stroke-width: 30; stroke-dasharray: 120 80; }
+.plan-svg .gap text { fill: #15803d; font-weight: 700; font-family: var(--font); paint-order: stroke; stroke: #fff; stroke-width: 60px; }
+.plan-svg .gap.short line { stroke: var(--color-danger); }
+.plan-svg .gap.short text { fill: var(--color-danger); }
+@media (max-width: 900px) { .field-grid.four { grid-template-columns: 1fr 1fr; } }
+.site-result { font-size: 13px; line-height: 1.45; padding: 9px 12px; border-radius: var(--radius); background: var(--color-bg); border: 1px solid var(--color-border); }
+.site-result .assume { margin-top: 6px; font-size: 11.5px; color: var(--color-muted); }
+.site-result .delta { margin-top: 4px; font-size: 11.5px; font-weight: 600; color: var(--color-success); }
+.site-result .delta.warn { color: var(--theme-accent); }
+.site-result .mode { margin-top: 4px; font-size: 10.5px; color: var(--color-muted); text-transform: uppercase; letter-spacing: .04em; }

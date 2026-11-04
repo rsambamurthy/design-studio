@@ -51,6 +51,45 @@ export const OperationSchemas = {
   flip_item: z.object({ itemId: id('furniture item') }).describe('Swap the hand of a handed item (e.g. chaise left <-> right).'),
   remove: z.object({ entityId: id('opening or furniture item') }).describe('Remove a door, window or furniture item.'),
   rename_room: z.object({ roomId: id('room'), name: z.string().min(1) }).describe('Rename a room.'),
+
+  // ---------- Site: plot, setbacks, access, trees, building placement ----------
+  set_plot: z
+    .object({
+      eastWest: distance.describe('Plot length along east–west, as the user wrote it'),
+      northSouth: distance.describe('Plot length along north–south, as the user wrote it'),
+    })
+    .describe('Set (or change) the plot size. Creates the site if there is none; the building is centred in the buildable area.'),
+  set_setback: z
+    .object({ side: z.enum(['north', 'south', 'east', 'west', 'all']), distance })
+    .describe('Set the required setback (open space) on one side of the plot, or all sides.'),
+  set_access: z
+    .object({
+      side: compass.describe('Plot side the road or passage runs along'),
+      kind: z.enum(['road', 'passage']),
+      width: distance.optional().describe('Width of the road or passage; for a passage inside the plot this must fit in that side\'s setback'),
+    })
+    .describe('Record a road or access passage along one side of the plot (one per side).'),
+  remove_access: z.object({ side: compass }).describe('Remove the road/passage on a side.'),
+  add_tree: z
+    .object({
+      label: z.string().min(1).describe('e.g. "Mango tree"'),
+      position: z
+        .enum(['north-west corner', 'north-east corner', 'south-west corner', 'south-east corner', 'north side', 'south side', 'east side', 'west side', 'centre'])
+        .describe('Where on the plot; sides mean the middle of that side'),
+      inset: distance.optional().describe('Distance of the trunk from the boundary (default 4\')'),
+      canopy: distance.optional().describe('Canopy diameter (default 20\')'),
+      keep: z.boolean().default(true).describe('Must be kept (building must stay clear of its trunk zone)'),
+    })
+    .describe('Add an existing tree on the plot.'),
+  move_tree: z.object({ treeId: id('tree'), direction: compass, distance }).describe('Move a tree marker.'),
+  remove_tree: z.object({ treeId: id('tree') }).describe('Remove a tree from the site.'),
+  place_building: z
+    .object({
+      northSouth: z.enum(['north', 'south', 'centre']).describe('Push the building to the north or south setback line, or centre it'),
+      eastWest: z.enum(['east', 'west', 'centre']).describe('Push the building to the east or west setback line, or centre it'),
+    })
+    .describe('Position the building within the setbacks.'),
+  move_building: z.object({ direction: compass, distance }).describe('Shift the whole building on the plot.'),
 } as const;
 
 export type OperationName = keyof typeof OperationSchemas;

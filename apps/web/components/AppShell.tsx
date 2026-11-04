@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 
-export type NavKey = 'designs' | 'studio' | 'versions' | 'share';
+export type NavKey = 'designs' | 'studio' | 'site' | 'versions' | 'share';
 
 interface Props {
   email: string;
@@ -14,7 +14,7 @@ interface Props {
   children: ReactNode;
 }
 
-const SOON = ['Plot & Setbacks', 'Elevations & 3D', 'Schedules', 'BOQ & Cost', 'Catalogue', 'Rule Checks'];
+const SOON = ['Elevations & 3D', 'Schedules', 'BOQ & Cost', 'Catalogue', 'Rule Checks'];
 
 export default function AppShell({ email, chip, active, designId, onNav, children }: Props) {
   async function logout() {
@@ -54,6 +54,7 @@ export default function AppShell({ email, chip, active, designId, onNav, childre
           <div className="sa-sb-head">Navigation</div>
           {item('designs', 'My Designs', '⌂')}
           {designId && item('studio', 'Design Studio', 'D')}
+          {designId && item('site', 'Plot & Setbacks', 'P')}
           {designId && item('versions', 'Versions', 'V')}
           {designId && item('share', 'Share', 'S')}
           {SOON.map((label) => (

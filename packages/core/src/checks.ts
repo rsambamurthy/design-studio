@@ -5,7 +5,8 @@
  */
 import { getCatalogueItem, itemFootprint } from './catalogue';
 import { rectSize, rectsOverlap, roomClearRect, wallDir, pointOnWall, type Rect } from './geometry';
-import { getWall, type BuildingModel, type FurnitureItem, type Opening, type Point } from './model';
+import { getWall, type BuildingModel, type FurnitureItem, type Opening, type PlanSide, type Point } from './model';
+import { PLAN_SIDES, boundaryGaps, circleHitsRect, footprintOnPlot, sideToCompass } from './site';
 import { formatLength } from './units';
 
 export type Severity = 'error' | 'warning' | 'advisory';
@@ -15,8 +16,10 @@ export interface Issue {
   severity: Severity;
   message: string;
   entityIds: string[];
-  /** Where to draw a marker on the plan. */
+  /** Where to draw a marker. */
   at?: Point;
+  /** Coordinate space of `at`: the building plan (default) or the site plan. */
+  space?: 'plan' | 'site';
 }
 
 /** Typical minimum clear width (mm) of the shorter side. Advisory only. */
@@ -87,7 +90,65 @@ export function runChecks(model: BuildingModel): Issue[] {
     }
   }
 
+  issues.push(...siteChecks(model));
   return issues;
+}
+
+/** Setbacks, plot fit, tree protection and passage width. */
+export function siteChecks(model: BuildingModel): Issue[] {
+  const site = model.site;
+  if (!site) return [];
+  const u = model.displayUnits;
+  const out: Issue[] = [];
+  const f = footprintOnPlot(model, site);
+  const gaps = boundaryGaps(model, site);
+  const mid = { x: (f.x0 + f.x1) / 2, y: (f.y0 + f.y1) / 2 };
+  const edgePoint = (side: PlanSide) =>
+    side === 'top' ? { x: mid.x, y: f.y0 } : side === 'bottom' ? { x: mid.x, y: f.y1 } : side === 'left' ? { x: f.x0, y: mid.y } : { x: f.x1, y: mid.y };
+
+  for (const side of PLAN_SIDES) {
+    const c = sideToCompass(side, model.northAngle);
+    if (gaps[side] < -1) {
+      out.push({ code: 'site.outside-plot', severity: 'error', message: `The building runs ${formatLength(-gaps[side], u)} past the ${c} boundary.`, entityIds: ['site'], at: edgePoint(side), space: 'site' });
+    } else if (gaps[side] < site.setbacks[side] - 1) {
+      out.push({
+        code: 'site.setback',
+        severity: 'error',
+        message: `${cap(c)} setback: building is ${formatLength(Math.max(gaps[side], 0), u)} from the boundary; ${formatLength(site.setbacks[side], u)} required.`,
+        entityIds: ['site'],
+        at: edgePoint(side),
+        space: 'site',
+      });
+    }
+  }
+
+  for (const a of site.access) {
+    const c = sideToCompass(a.side, model.northAngle);
+    if (a.kind === 'passage' && gaps[a.side] < a.width - 1) {
+      out.push({
+        code: 'site.access-blocked',
+        severity: 'error',
+        message: `The ${formatLength(a.width, u)} ${c} passage is narrowed to ${formatLength(Math.max(gaps[a.side], 0), u)} by the building.`,
+        entityIds: ['site'],
+        at: edgePoint(a.side),
+        space: 'site',
+      });
+    }
+  }
+
+  for (const t of site.trees) {
+    if (!t.keep) continue;
+    if (circleHitsRect(t.at, t.protectRadius, f)) {
+      out.push({ code: 'site.tree-conflict', severity: 'error', message: `The building is within ${formatLength(t.protectRadius, u)} of the ${t.label} trunk.`, entityIds: [t.id], at: t.at, space: 'site' });
+    } else if (circleHitsRect(t.at, t.canopyRadius, f)) {
+      out.push({ code: 'site.tree-canopy', severity: 'advisory', message: `The building is under the ${t.label} canopy; check roots and branches.`, entityIds: [t.id], at: t.at, space: 'site' });
+    }
+  }
+  return out;
+}
+
+function cap(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 /** Square swept by a door leaf, on its swing side. */

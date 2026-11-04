@@ -27,8 +27,18 @@ import {
   type Opening,
   type Point,
   type Room,
+  type Site,
   type Wall,
 } from './model';
+import {
+  PLAN_SIDES,
+  buildableRect,
+  compassToSide,
+  eastWestIsPlanX,
+  footprintOnPlot,
+  namedPlotPoint,
+  type TreePosition,
+} from './site';
 import type { Operation } from './ops';
 import { formatLength, parseLength } from './units';
 
@@ -231,6 +241,139 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       break;
     }
 
+    case 'set_plot': {
+      const ew = ctx.length(args.eastWest);
+      const ns = ctx.length(args.northSouth);
+      const xIsEW = eastWestIsPlanX(model.northAngle);
+      const plot = { width: xIsEW ? ew : ns, depth: xIsEW ? ns : ew };
+      if (plot.width > 1_000_000 || plot.depth > 1_000_000) throw new ModelError('That plot is over 1 km; check the units.');
+      const creating = !model.site;
+      const site = model.site ?? { plot, setbacks: { top: 0, bottom: 0, left: 0, right: 0 }, access: [], trees: [], buildingOffset: { x: 0, y: 0 } };
+      site.plot = plot;
+      model.site = site;
+      centreBuilding(model, site);
+      ctx.touch('site');
+      ctx.summary = `Plot set to ${formatLength(ew, model.displayUnits)} (E–W) × ${formatLength(ns, model.displayUnits)} (N–S).`;
+      if (creating) ctx.note('Setbacks start at 0 until you set them; the building was centred on the plot.');
+      else ctx.note('The building was re-centred in the buildable area.');
+      break;
+    }
+
+    case 'set_setback': {
+      const site = ctx.site();
+      const d = ctx.length(args.distance, true);
+      const sides = args.side === 'all' ? PLAN_SIDES : [compassToSide(args.side, model.northAngle)];
+      for (const s of sides) site.setbacks[s] = d;
+      ctx.touch('site');
+      ctx.summary =
+        args.side === 'all'
+          ? `Setbacks set to ${formatLength(d, model.displayUnits)} on all sides.`
+          : `${cap(args.side)} setback set to ${formatLength(d, model.displayUnits)}.`;
+      ctx.note('Setbacks are measured from the plot boundary to the building\'s outer wall face.');
+      break;
+    }
+
+    case 'set_access': {
+      const site = ctx.site();
+      const side = compassToSide(args.side, model.northAngle);
+      const width = args.width ? ctx.length(args.width) : site.setbacks[side];
+      if (width <= 0) throw new ModelError('Give the width of the road or passage.');
+      site.access = [...site.access.filter((a) => a.side !== side), { side, kind: args.kind, width }];
+      ctx.touch('site');
+      ctx.summary = `${cap(args.kind)} recorded along the ${args.side} side, ${formatLength(width, model.displayUnits)} wide.`;
+      if (!args.width) ctx.note(`Width taken as the ${args.side} setback.`);
+      if (args.kind === 'passage') ctx.note('A passage is treated as part of the plot, inside that side\'s setback.');
+      break;
+    }
+
+    case 'remove_access': {
+      const site = ctx.site();
+      const side = compassToSide(args.side, model.northAngle);
+      if (!site.access.some((a) => a.side === side)) throw new ModelError(`There is no road or passage on the ${args.side} side.`);
+      site.access = site.access.filter((a) => a.side !== side);
+      ctx.touch('site');
+      ctx.summary = `Removed the access on the ${args.side} side.`;
+      break;
+    }
+
+    case 'add_tree': {
+      const site = ctx.site();
+      const inset = args.inset ? ctx.length(args.inset) : 1219;
+      const canopy = args.canopy ? ctx.length(args.canopy) : 6096;
+      const at = namedPlotPoint(site, args.position as TreePosition, inset, model.northAngle);
+      const id = ctx.newId('tree');
+      site.trees.push({ id, label: args.label, at, canopyRadius: Math.round(canopy / 2), protectRadius: 1500, keep: args.keep ?? true });
+      ctx.touch('site', id);
+      ctx.summary = `Added ${args.label} at the ${args.position}.`;
+      ctx.note(
+        `Trunk ${formatLength(inset, model.displayUnits)} in from the boundary${args.inset ? '' : ' (default)'}; canopy ${formatLength(canopy, model.displayUnits)} across${args.canopy ? '' : ' (default)'}; building kept 5' clear of the trunk.`,
+      );
+      break;
+    }
+
+    case 'move_tree': {
+      const site = ctx.site();
+      const t = site.trees.find((x) => x.id === args.treeId);
+      if (!t) throw new ModelError(`No tree with id "${args.treeId}"`);
+      const d = ctx.length(args.distance);
+      const v = compassVector(args.direction, model.northAngle);
+      t.at = { x: Math.round(t.at.x + v.x * d), y: Math.round(t.at.y + v.y * d) };
+      ctx.touch('site', t.id);
+      ctx.summary = `Moved ${t.label} ${formatLength(d, model.displayUnits)} ${args.direction}.`;
+      break;
+    }
+
+    case 'remove_tree': {
+      const site = ctx.site();
+      const t = site.trees.find((x) => x.id === args.treeId);
+      if (!t) throw new ModelError(`No tree with id "${args.treeId}"`);
+      site.trees = site.trees.filter((x) => x.id !== t.id);
+      ctx.touch('site');
+      ctx.summary = `Removed ${t.label}.`;
+      break;
+    }
+
+    case 'place_building': {
+      const site = ctx.site();
+      const f = footprintOnPlot(model, site);
+      const b = buildableRect(site);
+      let dx = 0;
+      let dy = 0;
+      for (const [dir, axisArg] of [
+        [args.northSouth, 'ns'],
+        [args.eastWest, 'ew'],
+      ] as const) {
+        if (dir === 'centre') {
+          const axisIsX = axisArg === 'ew' ? eastWestIsPlanX(model.northAngle) : !eastWestIsPlanX(model.northAngle);
+          if (axisIsX) dx = (b.x0 + b.x1) / 2 - (f.x0 + f.x1) / 2;
+          else dy = (b.y0 + b.y1) / 2 - (f.y0 + f.y1) / 2;
+          continue;
+        }
+        const side = compassToSide(dir, model.northAngle);
+        if (side === 'top') dy = b.y0 - f.y0;
+        if (side === 'bottom') dy = b.y1 - f.y1;
+        if (side === 'left') dx = b.x0 - f.x0;
+        if (side === 'right') dx = b.x1 - f.x1;
+      }
+      site.buildingOffset = { x: Math.round(site.buildingOffset.x + dx), y: Math.round(site.buildingOffset.y + dy) };
+      ctx.touch('site');
+      const words = [args.northSouth, args.eastWest].filter((w) => w !== 'centre');
+      ctx.summary = words.length
+        ? `Building pushed to the ${words.join('-')} setback line${words.length > 1 ? 's' : ''}${args.northSouth === 'centre' || args.eastWest === 'centre' ? ', centred the other way' : ''}.`
+        : 'Building centred in the buildable area.';
+      break;
+    }
+
+    case 'move_building': {
+      const site = ctx.site();
+      const d = ctx.length(args.distance);
+      const v = compassVector(args.direction, model.northAngle);
+      site.buildingOffset = { x: Math.round(site.buildingOffset.x + v.x * d), y: Math.round(site.buildingOffset.y + v.y * d) };
+      ctx.touch('site');
+      ctx.summary = `Moved the building ${formatLength(d, model.displayUnits)} ${args.direction} on the plot.`;
+      break;
+    }
+
     case 'rename_room': {
       const room = getRoom(model, args.roomId);
       const before = room.name;
@@ -259,11 +402,16 @@ class Ctx {
     this.assumptions.push(text);
   }
 
-  length(text: string): number {
+  length(text: string, allowZero = false): number {
     const p = parseLength(text);
     if (p.note) this.note(p.note);
-    if (p.mm <= 0) throw new ModelError('Length must be greater than zero.');
+    if (p.mm < 0 || (p.mm === 0 && !allowZero)) throw new ModelError('Length must be greater than zero.');
     return p.mm;
+  }
+
+  site(): Site {
+    if (!this.model.site) throw new ModelError('Set the plot size first (e.g. "plot is 62\'6\" east–west by 52\' north–south").');
+    return this.model.site;
   }
 
   newId(prefix: string): string {
@@ -272,6 +420,7 @@ class Ctx {
       ...this.model.openings.map((e) => e.id),
       ...this.model.rooms.map((e) => e.id),
       ...this.model.furniture.map((e) => e.id),
+      ...(this.model.site?.trees ?? []).map((e) => e.id),
     ]);
     let n = 1;
     while (used.has(`${prefix}-${n}`)) n++;
@@ -385,6 +534,20 @@ class Ctx {
       if (Object.values(room.bounds).some((id) => this.changed.has(id))) this.touch(room.id);
     }
   }
+}
+
+/** Centre the building in the buildable area (or the plot when setbacks are zero). */
+function centreBuilding(model: BuildingModel, site: Site) {
+  const f = footprintOnPlot(model, site);
+  const b = buildableRect(site);
+  site.buildingOffset = {
+    x: Math.round(site.buildingOffset.x + (b.x0 + b.x1) / 2 - (f.x0 + f.x1) / 2),
+    y: Math.round(site.buildingOffset.y + (b.y0 + b.y1) / 2 - (f.y0 + f.y1) / 2),
+  };
+}
+
+function cap(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function axisName(c: Compass): string {

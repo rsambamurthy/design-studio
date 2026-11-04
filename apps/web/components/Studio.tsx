@@ -12,6 +12,8 @@ import {
 } from '@ds/core';
 import AppShell, { type NavKey } from './AppShell';
 import PlanView from './PlanView';
+import SitePanel, { type ApplyResult, type OpInput } from './SitePanel';
+import SitePlanView from './SitePlanView';
 import { api, when } from './DesignsHome';
 
 export interface RevisionMeta {
@@ -58,7 +60,7 @@ interface Share {
   createdAt: string;
 }
 
-type Tab = 'assistant' | 'versions' | 'share';
+type Tab = 'assistant' | 'site' | 'versions' | 'share';
 
 const EXAMPLES = [
   'Move the Bed 2 door 8 inches east',
@@ -81,6 +83,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const [shares, setShares] = useState<Share[] | null>(null);
   const [labelEdit, setLabelEdit] = useState<{ n: number; text: string } | null>(null);
   const [notice, setNotice] = useState('');
+  const [planMode, setPlanMode] = useState<'plan' | 'site'>('plan');
   const logRef = useRef<HTMLDivElement>(null);
 
   const model = viewing?.model ?? design.model;
@@ -113,6 +116,30 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     setLog((l) => [...l, entry]);
   }
 
+  /** Direct edits (site form): same typed operations, saved as one revision. */
+  async function applyOps(request: string, ops: OpInput[]): Promise<ApplyResult> {
+    if (busy) return { error: 'Please wait for the current change to finish.' };
+    setBusy(true);
+    try {
+      const r = await api<{ revision: number | null; summaries: string[]; assumptions: string[]; changedIds: string[]; newIssues: Issue[]; design: DesignDetail }>(
+        `/api/designs/${design.id}/ops`,
+        { method: 'POST', json: { request, ops, baseRev: design.currentRev } },
+      );
+      setDesign(r.design);
+      setChanged(new Set(r.changedIds));
+      setRedo([]);
+      setViewing(null);
+      setPlanMode('site');
+      say({ role: 'user', text: request });
+      say({ role: 'ai', text: r.summaries.join(' '), assumptions: r.assumptions, newIssues: r.newIssues, saved: r.revision });
+      return { summary: r.summaries.join(' '), assumptions: r.assumptions, newIssues: r.newIssues, revision: r.revision };
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : 'Could not save that change.' };
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function applyDesign(next: DesignDetail) {
     setChanged(new Set(diffModels(design.model, next.model).changed));
     setDesign(next);
@@ -137,6 +164,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
         setChanged(new Set(r.turn.changedIds));
         setRedo([]);
         setViewing(null);
+        if (r.turn.changedIds.includes('site')) setPlanMode('site');
       }
       say({
         role: 'ai',
@@ -261,8 +289,11 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   }
 
   const shareUrl = (t: string) => `${typeof window === 'undefined' ? '' : window.location.origin}/s/${t}`;
-  const onNav = (k: NavKey) => setTab(k === 'versions' ? 'versions' : k === 'share' ? 'share' : 'assistant');
-  const navActive: NavKey = tab === 'versions' ? 'versions' : tab === 'share' ? 'share' : 'studio';
+  const onNav = (k: NavKey) => {
+    setTab(k === 'versions' ? 'versions' : k === 'share' ? 'share' : k === 'site' ? 'site' : 'assistant');
+    if (k === 'site') setPlanMode('site');
+  };
+  const navActive: NavKey = tab === 'versions' ? 'versions' : tab === 'share' ? 'share' : tab === 'site' ? 'site' : 'studio';
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -285,9 +316,18 @@ export default function Studio({ email, initial }: { email: string; initial: Des
       <div className="workspace">
         <section className="card side-card" aria-label="Assistant, versions and sharing">
           <div className="tabs side-tabs" role="tablist">
-            {(['assistant', 'versions', 'share'] as Tab[]).map((t) => (
-              <button key={t} role="tab" aria-selected={tab === t} className={`tab ${tab === t ? 'on' : ''}`} onClick={() => setTab(t)}>
-                {t === 'assistant' ? 'Assistant' : t === 'versions' ? `Versions (${design.revisions.length})` : 'Share'}
+            {(['assistant', 'site', 'versions', 'share'] as Tab[]).map((t) => (
+              <button
+                key={t}
+                role="tab"
+                aria-selected={tab === t}
+                className={`tab ${tab === t ? 'on' : ''}`}
+                onClick={() => {
+                  setTab(t);
+                  if (t === 'site') setPlanMode('site');
+                }}
+              >
+                {t === 'assistant' ? 'Assistant' : t === 'site' ? 'Site' : t === 'versions' ? `Versions (${design.revisions.length})` : 'Share'}
               </button>
             ))}
           </div>
@@ -326,6 +366,14 @@ export default function Studio({ email, initial }: { email: string; initial: Des
                 <button className="btn-primary" type="submit" disabled={busy || !input.trim() || !!viewing}>Send</button>
               </form>
             </div>
+          )}
+
+          {tab === 'site' && (
+            viewing ? (
+              <p className="card-desc">You&apos;re viewing an old revision. Go back to current to edit the site.</p>
+            ) : (
+              <SitePanel model={design.model} busy={busy} apply={applyOps} revLabel={revisionLetter} />
+            )
           )}
 
           {tab === 'versions' && (
@@ -405,7 +453,8 @@ export default function Studio({ email, initial }: { email: string; initial: Des
         <section className="card plan-card" aria-label="Plan">
           <div className="canvas-head">
             <div className="tabs">
-              <span className="tab on">Plan</span>
+              <button type="button" className={`tab ${planMode === 'plan' ? 'on' : ''}`} onClick={() => setPlanMode('plan')}>Plan</button>
+              <button type="button" className={`tab ${planMode === 'site' ? 'on' : ''}`} onClick={() => setPlanMode('site')}>Site</button>
               <span className="tab off" title="Coming soon">Elevation</span>
               <span className="tab off" title="Coming soon">3D</span>
             </div>
@@ -424,7 +473,11 @@ export default function Studio({ email, initial }: { email: string; initial: Des
             </div>
           </div>
           {viewing && <p className="viewing-banner">Viewing Rev {revisionLetter(viewing.number)} (read-only)</p>}
-          <PlanView model={model} changedIds={changed} issues={issues} />
+          {planMode === 'site' ? (
+            <SitePlanView model={model} issues={issues} hot={changed.has('site')} />
+          ) : (
+            <PlanView model={model} changedIds={changed} issues={issues} />
+          )}
           <div className="checks">
             <span className={`badge ${counts.error ? 'badge-red' : 'badge-green'}`}>{plural(counts.error, 'error')}</span>
             <span className={`badge ${counts.warning ? 'badge-yellow' : 'badge-green'}`}>{plural(counts.warning, 'warning')}</span>

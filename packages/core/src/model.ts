@@ -81,8 +81,45 @@ export interface FurnitureItem {
   mirrored: boolean;
 }
 
+export type PlanSide = 'top' | 'bottom' | 'left' | 'right';
+
+export interface Tree {
+  id: string;
+  label: string;
+  /** Trunk centre, in plot coordinates. */
+  at: Point;
+  /** Canopy radius: building under it is flagged as advisory. */
+  canopyRadius: Mm;
+  /** Trunk/root protection radius: building inside it is an error. */
+  protectRadius: Mm;
+  keep: boolean;
+}
+
+export interface Access {
+  /** Plan side of the plot the road or passage runs along. */
+  side: PlanSide;
+  kind: 'road' | 'passage';
+  width: Mm;
+}
+
+/**
+ * The plot around the building. Plot coordinates: origin at the plot's
+ * top-left corner on the plan, same axes as the building. The building's wall
+ * coordinates are shifted by `buildingOffset` to sit on the plot.
+ * Setbacks are stored per plan side and shown as compass sides via northAngle.
+ */
+export interface Site {
+  plot: { width: Mm; depth: Mm };
+  setbacks: Record<PlanSide, Mm>;
+  access: Access[];
+  trees: Tree[];
+  buildingOffset: Point;
+}
+
 export interface BuildingModel {
   schema: 1;
+  /** Optional until the user enters a plot. */
+  site?: Site;
   id: string;
   name: string;
   /** Clockwise angle of true north from plan-up, degrees. 0 = north is up. */

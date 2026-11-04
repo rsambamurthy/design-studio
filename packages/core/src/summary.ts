@@ -6,7 +6,8 @@ import { getCatalogueItem, matchCatalogue, CATALOGUE } from './catalogue';
 import { runChecks } from './checks';
 import { planSideCompass, vectorToCompass, wallDir, type Compass } from './geometry';
 import { describeNorth, roomSizeText } from './kernel';
-import type { BuildingModel, Room, Wall } from './model';
+import type { BuildingModel, PlanSide, Room, Wall } from './model';
+import { PLAN_SIDES, boundaryGaps, eastWestIsPlanX, sideToCompass } from './site';
 import { formatLength } from './units';
 
 export function wallCompassForRoom(model: BuildingModel, room: Room, wallId: string): Compass | undefined {
@@ -54,6 +55,8 @@ export function modelSummary(model: BuildingModel): string {
     const hand = cat?.handed ? `, extension on ${f.mirrored ? 'left' : 'right'}` : '';
     lines.push(`- ${f.id}: ${f.label} (${f.catalogueId}${hand}) in ${f.roomId}`);
   }
+  lines.push('');
+  lines.push(siteSummary(model));
   const issues = runChecks(model);
   lines.push('');
   lines.push(`OPEN CHECKS: ${issues.length === 0 ? 'none' : ''}`);
@@ -142,3 +145,23 @@ export function findCatalogue(text: string) {
   return [best, ...others].filter(Boolean).slice(0, 4).map((c) => ({ id: c!.id, name: c!.name, width: c!.width, depth: c!.depth, handed: !!c!.handed }));
 }
 
+
+/** Site description for the LLM: plot, setbacks, access, trees, building gaps. */
+export function siteSummary(model: BuildingModel): string {
+  const site = model.site;
+  if (!site) return 'SITE: no plot entered yet (use set_plot first).';
+  const u = model.displayUnits;
+  const xIsEW = eastWestIsPlanX(model.northAngle);
+  const ew = xIsEW ? site.plot.width : site.plot.depth;
+  const ns = xIsEW ? site.plot.depth : site.plot.width;
+  const gaps = boundaryGaps(model, site);
+  const bySide = (f: (s: PlanSide) => string) => PLAN_SIDES.map((s) => `${sideToCompass(s, model.northAngle)} ${f(s)}`).join(', ');
+  const lines = [
+    `SITE: plot ${formatLength(ew, u)} E–W × ${formatLength(ns, u)} N–S.`,
+    `Setbacks required: ${bySide((s) => formatLength(site.setbacks[s], u))}.`,
+    `Building outer face to boundary: ${bySide((s) => formatLength(Math.round(gaps[s]), u))}.`,
+    `Access: ${site.access.length ? site.access.map((a) => `${a.kind} on ${sideToCompass(a.side, model.northAngle)}, ${formatLength(a.width, u)}`).join('; ') : 'none recorded'}.`,
+    `Trees (id: label): ${site.trees.length ? site.trees.map((t) => `${t.id}: ${t.label}${t.keep ? ' (keep)' : ''}`).join('; ') : 'none'}.`,
+  ];
+  return lines.join('\n');
+}

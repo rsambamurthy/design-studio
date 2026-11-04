@@ -37,6 +37,7 @@ export function diffModels(before: BuildingModel, after: BuildingModel): ModelDi
   const added = [...B.keys()].filter((k) => !A.has(k));
   const removed = [...A.keys()].filter((k) => !B.has(k));
   const changed = [...B.keys()].filter((k) => A.has(k) && JSON.stringify(A.get(k)) !== JSON.stringify(B.get(k)));
+  if (JSON.stringify(before.site ?? null) !== JSON.stringify(after.site ?? null)) changed.push('site');
 
   const size = (m: BuildingModel, id: string) => {
     const r = m.rooms.find((x) => x.id === id);

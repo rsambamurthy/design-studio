@@ -135,7 +135,7 @@ export default function PlanView({ model, changedIds, issues }: Props) {
         })}
 
         {/* Issue markers */}
-        {issues.filter((i) => i.at).map((i, k) => (
+        {issues.filter((i) => i.at && i.space !== 'site').map((i, k) => (
           <g key={`${i.code}-${k}`} className={`issue ${i.severity}`}>
             <title>{i.message}</title>
             <circle cx={i.at!.x} cy={i.at!.y} r={230} />
