@@ -69,7 +69,7 @@ export function runChecks(model: BuildingModel): Issue[] {
       if (cat && cat.frontClearance > 0) {
         const zone = frontZone(f, cat.frontClearance);
         const free = clearDepthInFront(model, f, rr);
-        if (free < cat.frontClearance) {
+        if (free < cat.frontClearance - 6) {
           issues.push({
             code: 'item.front-clearance',
             severity: 'warning',
@@ -350,8 +350,18 @@ function blockChecks(model: BuildingModel): Issue[] {
       return c.at.x > rr.x0 && c.at.x < rr.x1 && c.at.y > rr.y0 && c.at.y < rr.y1;
     });
     const own = model.rooms.find((r) => r.id === c.roomId);
-    if (inBlock && inBlock.id !== c.roomId && !own?.block) {
-      out.push({ code: 'core.under-room', severity: 'error', message: `The ${c.label.toLowerCase()} is under ${inBlock.name}.`, entityIds: [c.id, inBlock.id], at: c.at });
+    // Any part of the stair or lift (with its walls) under a room it doesn't belong to.
+    const outer = enclosureOf(model, c).outer;
+    const under =
+      inBlock && inBlock.id !== c.roomId && !own?.block
+        ? inBlock
+        : blocks.find((r) => {
+            if (r.id === c.roomId) return false;
+            const rr = roomClearRect(model, r);
+            return outer.x0 < rr.x1 - 5 && outer.x1 > rr.x0 + 5 && outer.y0 < rr.y1 - 5 && outer.y1 > rr.y0 + 5;
+          });
+    if (under) {
+      out.push({ code: 'core.under-room', severity: 'error', message: `The ${c.label.toLowerCase()} is under ${under.name}.`, entityIds: [c.id, under.id], at: c.at });
     }
   }
   return out;

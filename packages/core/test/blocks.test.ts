@@ -54,7 +54,11 @@ describe('room blocks', () => {
     const bed2 = room(m, 'Bed 2');
     const moved = apply(m, 'move_room', { roomId: bed2.id, direction: 'south', distance: "10'" }).model;
     const back = apply(moved, 'move_room', { roomId: bed2.id, direction: 'north', distance: "9'10\"" });
-    expect(room(back.model, 'Bed 2').block!.y0).toBe(bed2.block!.y0);
+    const nb = room(back.model, 'Bed 2').block!;
+    expect(nb.y0 === bed2.block!.y0 || nb.y1 === bed2.block!.y1).toBe(true);
+    const c0 = roomClearRect(m, bed2);
+    const c1 = roomClearRect(back.model, room(back.model, 'Bed 2'));
+    expect(Math.round(c1.y1 - c1.y0)).toBe(Math.round(c0.y1 - c0.y0));
     expect(back.assumptions.join(' ')).toMatch(/Lined up/);
   });
 

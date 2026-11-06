@@ -66,4 +66,27 @@ CREATE TABLE IF NOT EXISTS shares (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS shares_design_idx ON shares (design_id);
+
+-- Agent runs ("Fix the issues"): work on a draft; nothing is saved to the design until Keep.
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id              TEXT PRIMARY KEY,
+  design_id       TEXT NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+  user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind            TEXT NOT NULL,
+  status          TEXT NOT NULL,           -- running | done | failed | kept | discarded
+  outcome         TEXT,                    -- fixed | stuck | limit | stopped | nothing
+  base_rev        INTEGER NOT NULL,
+  model           JSONB NOT NULL,          -- the draft as it stands
+  steps           JSONB NOT NULL DEFAULT '[]',
+  before_score    JSONB,
+  after_score     JSONB,
+  remaining       JSONB,
+  message         TEXT,
+  mode            TEXT,                    -- claude | rules
+  tokens          INTEGER NOT NULL DEFAULT 0,
+  stop_requested  BOOLEAN NOT NULL DEFAULT false,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS agent_runs_design_idx ON agent_runs (design_id, created_at DESC);
 `;

@@ -74,7 +74,7 @@ export default function SitePanel({ model, busy, apply, revLabel }: Props) {
         ) as Record<Compass, { kind: AccessKind; width: string }>,
       );
     }
-  }, [model]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(model.site), model.northAngle]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function run(request: string, ops: OpInput[]) {
     setError('');

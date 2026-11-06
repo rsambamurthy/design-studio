@@ -640,9 +640,12 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       }
       const d = ctx.length(args.distance);
       const v = compassVector(args.direction, model.northAngle);
+      const size0 = roomClearRect(model, room);
+      const start0 = { ...room.block };
       translateBlock(model, room, Math.round(v.x * d), Math.round(v.y * d));
       const clamped = clampBlockInside(model, room);
       const snapped = snapBlock(model, room);
+      keepClearSize(model, room, size0, { x: room.block!.x0 - start0.x0 + (room.block!.x1 - start0.x1), y: room.block!.y0 - start0.y0 + (room.block!.y1 - start0.y1) });
       if (clamped.dx || clamped.dy) ctx.note(`Stopped at the outer wall.`);
       rehomeDoors(model, room, ctx);
       for (const f of model.furniture) if (f.roomId === room.id) ctx.touch(f.id);
@@ -679,8 +682,10 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       const b = room.block;
       const dx = Math.round(args.x - b.x0);
       const dy = Math.round(args.y - b.y0);
+      const size0 = roomClearRect(model, room);
       translateBlock(model, room, dx, dy);
       const pulled = clampBlockInside(model, room);
+      keepClearSize(model, room, size0, { x: dx + pulled.dx, y: dy + pulled.dy });
       rehomeDoors(model, room, ctx);
       const fx = dx + Math.round(pulled.dx);
       const fy = dy + Math.round(pulled.dy);
@@ -757,8 +762,10 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
           if (edge === 'bottom') y0 = t.y1 - h;
         }
       }
+      const size0 = roomClearRect(model, room);
       translateBlock(model, room, Math.round(x0 - b.x0), Math.round(y0 - b.y0));
       const clamped = clampBlockInside(model, room);
+      keepClearSize(model, room, size0, { x: x0 - b.x0 + clamped.dx, y: y0 - b.y0 + clamped.dy });
       rehomeDoors(model, room, ctx);
       for (const f of model.furniture) if (f.roomId === room.id) ctx.touch(f.id);
       for (const c of coresOf(model)) if (c.roomId === room.id) ctx.touch(c.id);
@@ -1572,6 +1579,25 @@ function followSite(model: BuildingModel, ctx: Ctx) {
     return;
   }
   ctx.note('This layout has fixed walls, so it was not resized. Use "Fit layout to plinth" to resize it to the new buildable area.');
+}
+
+/** A moved room keeps its clear size even when a side lands on (or leaves) a thicker outer wall. */
+function keepClearSize(model: BuildingModel, room: Room, size: Rect, moved: { x: number; y: number }) {
+  // The side trailing the move gives; the leading side stays where it was put.
+  for (let i = 0; i < 3; i++) {
+    const now = roomClearRect(model, room);
+    for (const axis of ['x', 'y'] as const) {
+      const want = axis === 'x' ? size.x1 - size.x0 : size.y1 - size.y0;
+      const have = axis === 'x' ? now.x1 - now.x0 : now.y1 - now.y0;
+      const delta = Math.round(want - have);
+      if (Math.abs(delta) < 1) continue;
+      const [lo, hi] = axis === 'x' ? (['left', 'right'] as const) : (['top', 'bottom'] as const);
+      const m = moved[axis];
+      if (m > 0) resizeBlockSide(model, room, lo, -delta);
+      else if (m < 0) resizeBlockSide(model, room, hi, delta);
+      else setBlockClearSize(model, room, axis === 'x' ? Math.round(want) : undefined, axis === 'y' ? Math.round(want) : undefined);
+    }
+  }
 }
 
 /** Standard clear sizes for new room blocks. */

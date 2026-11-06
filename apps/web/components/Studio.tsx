@@ -99,6 +99,10 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const [placing, setPlacing] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedDoor, setSelectedDoor] = useState<string | null>(null);
+  // "Fix the issues" agent run: while running or awaiting Keep/Discard, the plan shows its draft.
+  const [run, setRun] = useState<AgentRunView | null>(null);
+  const [runBusy, setRunBusy] = useState(false);
+  const runActive = !!run && (run.status === 'running' || run.status === 'done');
   const [viewing, setViewing] = useState<{ number: number; model: BuildingModel } | null>(null);
   const [compare, setCompare] = useState<number[]>([]);
   const [shares, setShares] = useState<Share[] | null>(null);
@@ -108,7 +112,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const [editStatus, setEditStatus] = useState<{ text: string; error: boolean } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
-  const model = viewing?.model ?? design.model;
+  const model = runActive ? run!.model : viewing?.model ?? design.model;
   const selectedRoom = model.rooms.find((r) => r.id === selected && r.block);
   const selectedDoorObj = model.openings.find((o) => o.id === selectedDoor);
   const current = design.revisions.find((r) => r.number === design.currentRev);
@@ -180,7 +184,59 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   }
 
   /** Drag edits on the plan or site: saved like any other change; disabled while viewing old revisions. */
-  const dragEdit = viewing || busy ? undefined : (request: string, ops: OpInput[]) => void applyOps(request, ops, false);
+  const dragEdit = viewing || busy || runActive ? undefined : (request: string, ops: OpInput[]) => void applyOps(request, ops, false);
+
+  // Pick up a run left open (e.g. after a reload), then follow it while it runs.
+  useEffect(() => {
+    api<{ run: AgentRunView | null }>(`/api/designs/${design.id}/agent`).then((r) => setRun(r.run)).catch(() => {});
+  }, [design.id]);
+  useEffect(() => {
+    if (!run || run.status !== 'running') return;
+    const t = setInterval(() => {
+      api<{ run: AgentRunView }>(`/api/designs/${design.id}/agent/${run.id}`).then((r) => setRun(r.run)).catch(() => {});
+    }, 1000);
+    return () => clearInterval(t);
+  }, [run?.id, run?.status, design.id]);
+
+  async function startFix() {
+    setRunBusy(true);
+    setSelected(null);
+    setSelectedDoor(null);
+    try {
+      const r = await api<{ run: AgentRunView }>(`/api/designs/${design.id}/agent`, { method: 'POST' });
+      setRun(r.run);
+    } catch (e) {
+      say({ role: 'ai', text: e instanceof Error ? e.message : 'Could not start.', error: true });
+    } finally {
+      setRunBusy(false);
+    }
+  }
+
+  async function runAction(action: 'stop' | 'keep' | 'discard') {
+    if (!run) return;
+    setRunBusy(true);
+    try {
+      const r = await api<{ run: AgentRunView; revision?: number | null; design?: DesignDetail }>(`/api/designs/${design.id}/agent/${run.id}`, {
+        method: 'POST',
+        json: { action },
+      });
+      if (action === 'keep' && r.design) {
+        applyDesign(r.design);
+        setRedo([]);
+        setRun(null);
+        say({ role: 'ai', text: `Kept the agent's fixes.`, saved: r.revision ?? undefined });
+      } else if (action === 'discard') {
+        setRun(null);
+      } else {
+        setRun(r.run);
+      }
+    } catch (e) {
+      say({ role: 'ai', text: e instanceof Error ? e.message : 'That did not work.', error: true });
+      setEditStatus({ text: e instanceof Error ? e.message : 'That did not work.', error: true });
+    } finally {
+      setRunBusy(false);
+    }
+  }
 
   function applyDesign(next: DesignDetail) {
     setChanged(new Set(diffModels(design.model, next.model).changed));
@@ -583,7 +639,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
             <SitePlanView model={model} issues={issues} hot={changed.has('site')} onEdit={dragEdit} />
           ) : (
             <>
-              {!viewing && (
+              {!viewing && !runActive && (
                 <div className="palette" role="toolbar" aria-label="Room blocks">
                   <span className="palette-title">Drag into the plan</span>
                   {PALETTE.map((b) => (
@@ -606,6 +662,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
                   ))}
                 </div>
               )}
+              {runActive && <p className="draft-banner">Agent draft, not saved yet. {run!.status === 'running' ? 'Working…' : 'Keep or discard it below the plan.'}</p>}
               {placing && <p className="placing-hint">Tap the plan where the {PALETTE.find((b) => b.kind === placing)?.label.toLowerCase()} goes. <button className="link-btn" onClick={() => setPlacing(null)}>Cancel</button></p>}
               <PlanView
                 model={model}
@@ -658,7 +715,13 @@ export default function Studio({ email, initial }: { email: string; initial: Des
           <p className={`edit-status ${editStatus?.error ? 'err' : ''}`} role="status">
             {editStatus ? editStatus.text : viewing ? 'Viewing an old revision: go back to current to edit.' : 'Tip: drag a room by its name to move it; drag its walls to resize it. Doors, windows, furniture, stairs and lifts drag too (snaps to 1").'}
           </p>
+          {runActive && <AgentPanel run={run!} busy={runBusy} onAction={(a) => void runAction(a)} />}
           <div className="checks">
+            {!runActive && !viewing && counts.error + counts.warning > 0 && (
+              <button type="button" className="btn-primary btn-sm fix-btn" onClick={() => void startFix()} disabled={runBusy || busy}>
+                ✦ Fix the issues
+              </button>
+            )}
             <span className={`badge ${counts.error ? 'badge-red' : 'badge-green'}`}>{plural(counts.error, 'error')}</span>
             <span className={`badge ${counts.warning ? 'badge-yellow' : 'badge-green'}`}>{plural(counts.warning, 'warning')}</span>
             <span className="badge badge-gray">{plural(counts.advisory, 'advisory', 'advisories')}</span>
@@ -884,4 +947,110 @@ function downloadChat(name: string, log: ChatEntry[]) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** What the browser sees of an agent run. */
+interface AgentRunView {
+  id: string;
+  status: 'running' | 'done' | 'failed' | 'kept' | 'discarded';
+  outcome: 'fixed' | 'stuck' | 'limit' | 'stopped' | 'nothing' | null;
+  model: BuildingModel;
+  steps: { n: number; why: string; summary: string; accepted: boolean; reason?: string; errors: number; warnings: number }[];
+  before: { errors: number; warnings: number } | null;
+  after: { errors: number; warnings: number } | null;
+  remaining: { message: string; severity: string }[] | null;
+  message: string | null;
+  mode: string | null;
+  stopRequested: boolean;
+}
+
+/** Live progress of "Fix the issues", then Keep / Discard. */
+function AgentPanel({ run, busy, onAction }: { run: AgentRunView; busy: boolean; onAction: (a: 'stop' | 'keep' | 'discard') => void }) {
+  const [showTried, setShowTried] = useState(false);
+  const kept = run.steps.filter((s) => s.accepted);
+  const tried = run.steps.length - kept.length;
+  const running = run.status === 'running';
+  const last = run.steps[run.steps.length - 1];
+  const now = run.after ?? (last ? { errors: last.errors, warnings: last.warnings } : null);
+  const headline = running
+    ? run.stopRequested
+      ? 'Stopping after this step…'
+      : `Fixing issues… ${kept.length} change${kept.length === 1 ? '' : 's'} so far`
+    : run.outcome === 'fixed'
+      ? 'All errors and warnings fixed'
+      : run.outcome === 'nothing'
+        ? 'Nothing to fix'
+        : run.outcome === 'stopped'
+          ? 'Stopped'
+          : run.outcome === 'limit'
+            ? 'Stopped at the step limit'
+            : kept.length
+              ? 'Fixed what it could'
+              : 'Could not find a fix';
+  return (
+    <div className={`agent-panel ${running ? 'running' : ''}`} role="status" aria-live="polite">
+      <div className="agent-head">
+        <strong>{headline}</strong>
+        {run.before && now && (
+          <span className="agent-counts">
+            Errors {run.before.errors} → {now.errors} · Warnings {run.before.warnings} → {now.warnings}
+          </span>
+        )}
+        <span className="agent-mode">{run.mode === 'claude' ? 'Claude + rules' : 'Rule-based (no API key)'}</span>
+      </div>
+      {kept.length > 0 && (
+        <ol className="agent-steps">
+          {kept.map((s) => (
+            <li key={s.n}>
+              <span className="ok">✓</span> {s.summary || s.why}
+            </li>
+          ))}
+        </ol>
+      )}
+      {running && last && !last.accepted && <p className="agent-trying">Trying: {last.why}…</p>}
+      {tried > 0 && (
+        <button type="button" className="link-btn agent-tried-btn" onClick={() => setShowTried((v) => !v)}>
+          {showTried ? 'Hide' : 'Show'} {tried} idea{tried === 1 ? '' : 's'} it tried and turned down
+        </button>
+      )}
+      {showTried && (
+        <ul className="agent-tried">
+          {run.steps.filter((s) => !s.accepted).map((s) => (
+            <li key={s.n}>
+              ✗ {s.why} <em>({s.reason})</em>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!running && run.remaining && run.remaining.length > 0 && (
+        <div className="agent-remaining">
+          Still open (needs you):
+          <ul>
+            {run.remaining.map((r, k) => (
+              <li key={k} className={r.severity}>{r.message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {run.status === 'failed' && <p className="error-text">{run.message}</p>}
+      <div className="agent-btns">
+        {running ? (
+          <button type="button" className="btn-secondary" disabled={busy || run.stopRequested} onClick={() => onAction('stop')}>
+            ■ Stop
+          </button>
+        ) : (
+          <>
+            {kept.length > 0 && (
+              <button type="button" className="btn-primary" disabled={busy} onClick={() => onAction('keep')}>
+                Keep changes
+              </button>
+            )}
+            <button type="button" className="btn-secondary" disabled={busy} onClick={() => onAction('discard')}>
+              {kept.length > 0 ? 'Discard' : 'Close'}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
