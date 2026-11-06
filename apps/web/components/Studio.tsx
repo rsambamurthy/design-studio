@@ -122,6 +122,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const [notice, setNotice] = useState('');
   const [planMode, setPlanMode] = useState<'plan' | 'site' | 'structure'>('plan');
   const [selectedCol, setSelectedCol] = useState<string | null>(null);
+  const [agentWhy, setAgentWhy] = useState('');
   const [editStatus, setEditStatus] = useState<{ text: string; error: boolean } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -142,6 +143,20 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     warning: issues.filter((i) => i.severity === 'warning').length,
     advisory: issues.filter((i) => i.severity === 'advisory').length,
   };
+
+  // The agents bar: every agent, always visible; the ones that can't run say why.
+  const briefNow = checkBrief(design.model);
+  const hasBrief = briefNow.length > 0;
+  const roomsMissing = briefNow.some((r) => r.item.type === 'count' && !r.met);
+  const briefUnmet = briefNow.some((r) => !r.met && !r.empty);
+  const agentBusy = runActive ? 'An agent is working; keep or discard its result first.' : previewOpt ? 'Use or leave the option you are previewing first.' : viewing ? 'You are viewing an old revision.' : busy || runBusy || optionsBusy ? 'Working…' : '';
+  const agents: { key: string; label: string; why: string; go: () => void }[] = [
+    { key: 'layout', label: 'Lay out the rooms', why: agentBusy || (!hasBrief ? 'Choose the rooms in the Brief tab and save the brief first.' : !roomsMissing ? 'Every room the brief asks for is already in the plan.' : ''), go: () => { setTab('brief'); void startFix('brief'); } },
+    { key: 'options', label: 'Give me options', why: agentBusy || (!hasBrief ? 'Choose the rooms in the Brief tab and save the brief first.' : !roomsMissing ? 'Options are for laying out missing rooms; the brief has them all.' : ''), go: () => { setTab('brief'); void makeOptions(); } },
+    { key: 'brief', label: 'Meet the brief', why: agentBusy || (!hasBrief ? 'Save a brief in the Brief tab first.' : !briefUnmet ? 'The brief is already met.' : ''), go: () => { setTab('brief'); void startFix('brief'); } },
+    { key: 'fix', label: 'Fix the issues', why: agentBusy || (counts.error + counts.warning === 0 ? 'No errors or warnings to fix.' : ''), go: () => void startFix('fix') },
+    { key: 'budget', label: 'Fit my budget', why: agentBusy, go: () => { setTab('cost'); setPlanMode('plan'); } },
+  ];
   const carpetSqFt = useMemo(() => {
     const mm2 = model.rooms.filter((r) => r.kind !== 'lobby').reduce((s, r) => {
       const c = roomClearRect(model, r);
@@ -685,6 +700,19 @@ export default function Studio({ email, initial }: { email: string; initial: Des
         </section>
 
         <section className="card plan-card" aria-label="Plan">
+          <div className="agents-bar" role="toolbar" aria-label="Agents">
+            <span className="agents-title">✦ Agents</span>
+            {agents.map((a) => (
+              <button key={a.key} type="button" className={`agent-chip ${a.why ? 'off' : ''}`} aria-disabled={!!a.why} title={a.why || undefined} onClick={() => (a.why ? setAgentWhy(`${a.label}: ${a.why}`) : (setAgentWhy(''), a.go()))}>
+                {a.label}
+              </button>
+            ))}
+          </div>
+          {agentWhy && (
+            <p className="agents-why" role="status">
+              {agentWhy} <button type="button" className="link-btn" onClick={() => setAgentWhy('')}>OK</button>
+            </p>
+          )}
           <div className="canvas-head">
             <div className="tabs">
               <button type="button" className={`tab ${planMode === 'plan' ? 'on' : ''}`} onClick={() => setPlanMode('plan')}>Plan</button>
