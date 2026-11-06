@@ -50,6 +50,7 @@ import { parseOperation as parseOp, type Operation } from './ops';
 import { doorSwingRect } from './checks';
 import { clampBlockInside, coincidentSides, resizeBlockSide, rotateBlock, setBlockClearSize, shellAxisRect, snapBlock, splitBlock, translateBlock } from './blocks';
 import { fitOutRoom } from './fixtures';
+import { BriefSchema, briefLabel } from './brief';
 import { CORNERS, DEFAULT_FLOOR_HEIGHT, LIFT_SHAFTS, coreFootprint, coresOf, enclosureOf, placeInCorner, settleCore, sizeStair, type Corner } from './cores';
 import { formatLength, parseLength } from './units';
 
@@ -704,6 +705,15 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       break;
     }
 
+    case 'set_brief': {
+      const parsed = BriefSchema.parse({ items: (args.items as unknown[]).map((i) => Object.fromEntries(Object.entries(i as object).filter(([, v]) => v !== undefined && v !== ''))) });
+      for (const it of parsed.items) if (it.type === 'min_size') { parseLength(it.width); parseLength(it.depth); }
+      model.brief = parsed as BuildingModel['brief'];
+      ctx.touch('brief');
+      ctx.summary = parsed.items.length ? `Brief set: ${parsed.items.map((i) => briefLabel(i).toLowerCase()).join('; ')}.` : 'Brief cleared.';
+      break;
+    }
+
     case 'rotate_room': {
       const room = getRoom(model, args.roomId);
       if (!room.block) throw new ModelError(`${room.name} is fixed by walls; it can't be turned.`);
@@ -1005,6 +1015,14 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
           break;
         } catch (err) {
           last = err;
+        }
+      }
+      if (!r && room.block && args.beside !== false) {
+        // Too small to give up space: a new toilet block beside it, sharing a wall, with a door between.
+        const t = attachToiletBlock(model, ctx, room, args.width ? ctx.length(args.width) : 1524, length);
+        if (t) {
+          ctx.summary = `Added ${t.name} beside ${room.name}, sharing a wall, with a door from ${room.name}: ${roomSizeText(model, t)}.`;
+          break;
         }
       }
       if (!r) throw last;
@@ -1598,6 +1616,61 @@ function keepClearSize(model: BuildingModel, room: Room, size: Rect, moved: { x:
       else setBlockClearSize(model, room, axis === 'x' ? Math.round(want) : undefined, axis === 'y' ? Math.round(want) : undefined);
     }
   }
+}
+
+/**
+ * A new toilet block in the open space right against a room block: along one of
+ * its free sides (not an outer wall, no other room there, clear of its doors),
+ * inside the building and clear of other rooms, stairs and lifts. Prefers a spot
+ * on an outer wall (ventilator, pipes). Adds the connecting door and fixtures.
+ */
+function attachToiletBlock(model: BuildingModel, ctx: Ctx, room: Room, tw: number, tl: number): Room | undefined {
+  const T = 115;
+  const b = room.block!;
+  const shell = shellAxisRect(model);
+  const others = model.rooms.filter((r) => r.block && r.id !== room.id).map((r) => {
+    const o = r.block!;
+    return { x0: o.x0, x1: o.x1, y0: o.y0, y1: o.y1 };
+  });
+  const coreRects = [...coresOf(model).map((c) => enclosureOf(model, c).outer), ...model.furniture.filter((f) => f.roomId !== room.id).map((f) => itemFootprint(f))];
+  const doorsOfRoom = SIDES4.flatMap((sd) => roomOpeningsOn(model, room, sd).filter((o) => o.kind !== 'window').map((o) => ({ sd, p: pointOnWall(getWall(model, o.wallId), o.offset), w: o.width })));
+  type Opt = { rect: Rect; score: number };
+  const opts: Opt[] = [];
+  for (const sd of SIDES4) {
+    if (fixedWallUnder(model, room, sd) || coincidentSides(model, room, sd).length) continue;
+    const horizontal = sd === 'top' || sd === 'bottom';
+    for (const [along, across] of [[tl, tw], [tw, tl]] as const) {
+      const ax = along + T; // axis extents (clear + one wall)
+      const ac = across + T;
+      const span = horizontal ? [b.x0, b.x1] : [b.y0, b.y1];
+      for (const pos of [span[0]!, span[1]! - ax, (span[0]! + span[1]! - ax) / 2]) {
+        const rect = horizontal
+          ? { x0: pos, x1: pos + ax, y0: sd === 'top' ? b.y0 - ac : b.y1, y1: sd === 'top' ? b.y0 : b.y1 + ac }
+          : { x0: sd === 'left' ? b.x0 - ac : b.x1, x1: sd === 'left' ? b.x0 : b.x1 + ac, y0: pos, y1: pos + ax };
+        if (rect.x0 < shell.x0 - 1 || rect.x1 > shell.x1 + 1 || rect.y0 < shell.y0 - 1 || rect.y1 > shell.y1 + 1) continue;
+        if (others.some((o) => rectsOverlap(o, rect, 5))) continue;
+        if (coreRects.some((o) => rectsOverlap(o, rect, 5))) continue;
+        // Don't wall up the room's own door on that side.
+        if (doorsOfRoom.some((d) => d.sd === sd && (horizontal ? d.p.x + d.w / 2 > rect.x0 && d.p.x - d.w / 2 < rect.x1 : d.p.y + d.w / 2 > rect.y0 && d.p.y - d.w / 2 < rect.y1))) continue;
+        const outer = Number(Math.abs(rect.x0 - shell.x0) < 2) + Number(Math.abs(rect.x1 - shell.x1) < 2) + Number(Math.abs(rect.y0 - shell.y0) < 2) + Number(Math.abs(rect.y1 - shell.y1) < 2);
+        opts.push({ rect, score: outer * 10 - (pos === span[0] || pos === span[1]! - ax ? 0 : 1) });
+      }
+    }
+  }
+  const pick = opts.sort((a, c) => c.score - a.score)[0];
+  if (!pick) return undefined;
+  const name = uniqueName(model, `Toilet ${model.rooms.filter((r) => r.kind === 'toilet').length + 1}`);
+  const t: Room = { id: ctx.newId('r'), name, kind: 'toilet', wet: true, bounds: blockBounds('x'), block: { ...pick.rect, thickness: T } };
+  t.bounds = blockBounds(t.id);
+  model.rooms.push(t);
+  const withDoor = applyOperation(model, parseOp('add_door_between', { roomA: room.id, roomB: t.id }));
+  Object.assign(model, withDoor.model);
+  addBlockDoorAndVent(model, ctx, model.rooms.find((x) => x.id === t.id)!);
+  // addBlockDoorAndVent adds a door to the open space too; an attached toilet doesn't need it.
+  model.openings = model.openings.filter((o) => !(o.label === `${name} door` && parseBlockWallId(o.wallId)?.roomId === t.id));
+  fitOutRoom(model, model.rooms.find((x) => x.id === t.id)!).forEach((f) => ctx.touch(f.id));
+  ctx.touch(t.id, room.id);
+  return model.rooms.find((x) => x.id === t.id);
 }
 
 /** Standard clear sizes for new room blocks. */

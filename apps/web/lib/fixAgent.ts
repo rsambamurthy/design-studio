@@ -6,7 +6,13 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import {
+  BRIEF_OPS,
   FIX_OPS,
+  allRulesDecider,
+  briefObjective,
+  checkBrief,
+  fixObjective,
+  readBrief,
   chainDeciders,
   modelSummary,
   operationToolDefinitions,
@@ -37,6 +43,23 @@ Rules (steps that break them are turned down automatically):
 - A fix that makes the plan worse is undone; the history shows what was tried. Don't repeat a failed idea.
 - If you can't see a fix for the first problem, call give_up with a short reason.`;
 
+const BRIEF_SYSTEM = `You change a residential floor plan so it meets the client's brief, one problem at a time, using the tools.
+
+Each turn you get the plan (rooms with positions and gaps, doors, fixtures, stairs and lifts), the brief checklist with what is met, and the open problems in order: errors first, then brief items, then warnings. Work on the FIRST open problem: call one to three tools for it, then stop.
+
+How to meet common brief items:
+- Room on an outer wall / needs a window: place_room_against with targetId "outer" (side = the outer wall; align to a corner if useful), or swap_rooms with a room already on an outer wall; then add_opening a window on the OUTER wall (wallId of the outer wall, roomId the room).
+- Room in a compass zone (e.g. kitchen in the south-east): place_room_against "outer" on one of the zone's sides, aligned to the other (side south, align east), or swap_rooms with the room already there.
+- Attached toilet: add_toilet on the bedroom (it carves one out, or puts a new toilet beside it with a door).
+- Minimum size: set_room_size, or move_wall on the room's own blk: walls to grow it away from neighbours.
+- Next to another room: place_room_against that room.
+
+Rules (steps that break them are turned down automatically):
+- Don't remove rooms, stairs or lifts; only toilets may be added (via add_toilet). Don't change the plot or setbacks.
+- Rooms may grow, but not shrink by more than 6".
+- A step that makes the plan worse overall is undone; if it puts a room on top of another, the other room is moved out of the way automatically when possible. The history shows what was tried; don't repeat a failed idea.
+- If you can't see a way to meet the first problem, call give_up.`;
+
 const GIVE_UP = {
   name: 'give_up',
   description: 'No sensible fix for the first problem within the rules.',
@@ -44,10 +67,12 @@ const GIVE_UP = {
 };
 
 /** Claude proposes one candidate fix per step. Tracks token use. */
-export function claudeDecider(usage: { tokens: number }): Decider {
+export function claudeDecider(usage: { tokens: number }, kind: RunKind = 'fix'): Decider {
   const client = new Anthropic();
   const modelId = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
-  const tools = [...operationToolDefinitions().filter((t) => FIX_OPS.includes(t.name as (typeof FIX_OPS)[number])), GIVE_UP];
+  const allowed: readonly string[] = kind === 'brief' ? BRIEF_OPS : FIX_OPS;
+  const tools = [...operationToolDefinitions().filter((t) => allowed.includes(t.name)), GIVE_UP];
+  const system = kind === 'brief' ? BRIEF_SYSTEM : FIX_SYSTEM;
   return {
     async decide({ model, issues, history }) {
       const recent = history
@@ -58,10 +83,17 @@ export function claudeDecider(usage: { tokens: number }): Decider {
       const res = await client.messages.create({
         model: modelId,
         max_tokens: 800,
-        system: [{ type: 'text', text: FIX_SYSTEM, cache_control: { type: 'ephemeral' } }],
+        system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
         tools: tools as unknown as Anthropic.Tool[],
         tool_choice: { type: 'any' },
-        messages: [{ role: 'user', content: `PLAN\n${modelSummary(model)}\n\nOPEN PROBLEMS (fix the first)\n${problems}${recent ? `\n\nTRIED SO FAR\n${recent}` : ''}` }],
+        messages: [
+          {
+            role: 'user',
+            content: `PLAN\n${modelSummary(model)}${
+              kind === 'brief' ? `\n\nBRIEF\n${checkBrief(model).map((b) => `- [${b.met ? 'x' : b.empty ? '-' : ' '}] ${b.label}${b.failing.length ? ` (${b.failing.map((f) => f.why).join('; ')})` : ''}`).join('\n')}` : ''
+            }\n\nOPEN PROBLEMS (work on the first)\n${problems}${recent ? `\n\nTRIED SO FAR\n${recent}` : ''}`,
+          },
+        ],
       });
       usage.tokens += (res.usage?.input_tokens ?? 0) + (res.usage?.output_tokens ?? 0);
       const calls = res.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
@@ -74,8 +106,11 @@ export function claudeDecider(usage: { tokens: number }): Decider {
   };
 }
 
+export type RunKind = 'fix' | 'brief';
+
 export interface AgentRun {
   id: string;
+  kind: RunKind;
   status: 'running' | 'done' | 'failed' | 'kept' | 'discarded';
   outcome: string | null;
   baseRev: number;
@@ -93,6 +128,7 @@ export interface AgentRun {
 
 type Row = {
   id: string;
+  kind: RunKind;
   status: AgentRun['status'];
   outcome: string | null;
   base_rev: number;
@@ -111,6 +147,7 @@ type Row = {
 
 const asRun = (r: Row): AgentRun => ({
   id: r.id,
+  kind: r.kind,
   status: r.status,
   outcome: r.outcome,
   baseRev: r.base_rev,
@@ -156,10 +193,11 @@ export async function openRun(userId: string, designId: string): Promise<AgentRu
 }
 
 /** Start fixing in the background; returns at once with the new run. */
-export async function startFixRun(userId: string, designId: string): Promise<AgentRun> {
+export async function startFixRun(userId: string, designId: string, kind: RunKind = 'fix'): Promise<AgentRun> {
   const existing = await openRun(userId, designId);
   if (existing?.status === 'running') return existing;
   const design = await getDesign(userId, designId);
+  if (kind === 'brief' && !readBrief(design.model)) throw new AuthError('Set the brief first (Brief tab).');
   const db = await getDb();
   const id = newId(12);
   const mode = process.env.ANTHROPIC_API_KEY ? 'claude' : 'rules';
@@ -168,21 +206,25 @@ export async function startFixRun(userId: string, designId: string): Promise<Age
     [designId, userId],
   );
   await db.query(
-    `INSERT INTO agent_runs (id, design_id, user_id, kind, status, base_rev, model, mode) VALUES ($1, $2, $3, 'fix', 'running', $4, $5, $6)`,
-    [id, designId, userId, design.currentRev, JSON.stringify(design.model), mode],
+    `INSERT INTO agent_runs (id, design_id, user_id, kind, status, base_rev, model, mode) VALUES ($1, $2, $3, $7, 'running', $4, $5, $6)`,
+    [id, designId, userId, design.currentRev, JSON.stringify(design.model), mode, kind],
   );
-  void execute(id, design.model, mode);
+  void execute(id, design.model, mode, kind);
   return getRun(userId, designId, id);
 }
 
-async function execute(runId: string, start: BuildingModel, mode: string) {
+async function execute(runId: string, start: BuildingModel, mode: string, kind: RunKind) {
   const db = await getDb();
   const usage = { tokens: 0 };
-  const decider = mode === 'claude' ? chainDeciders(claudeDecider(usage), ruleDecider) : ruleDecider;
+  const rules = kind === 'brief' ? allRulesDecider : ruleDecider;
+  const decider = mode === 'claude' ? chainDeciders(claudeDecider(usage, kind), rules) : rules;
   const steps: StepRecord[] = [];
   try {
     const result = await runFixLoop(start, decider, {
-      maxSteps: 15,
+      objective: kind === 'brief' ? briefObjective : fixObjective,
+      repairSteps: kind === 'brief' ? 4 : 0,
+      maxTries: kind === 'brief' ? 300 : 80,
+      maxSteps: kind === 'brief' ? 30 : 15,
       shouldStop: async () => {
         const { rows } = await db.query<{ stop_requested: boolean }>(`SELECT stop_requested FROM agent_runs WHERE id = $1`, [runId]);
         return !!rows[0]?.stop_requested;
@@ -240,11 +282,15 @@ export async function keepRun(userId: string, designId: string, runId: string): 
   for (const s of kept) for (const o of s.ops) ops.push(parseOperation(o.op, o.args));
   const b = r.before_score;
   const a = r.after_score;
-  const summary = `Fixed issues with ${kept.length} change${kept.length === 1 ? '' : 's'}: ${kept.map((s) => s.summary).join(' ')}`.slice(0, 1900);
+  const what = r.kind === 'brief' ? 'Worked towards the brief' : 'Fixed issues';
+  const summary = `${what} with ${kept.length} change${kept.length === 1 ? '' : 's'}: ${kept.map((s) => s.summary).join(' ')}`.slice(0, 1900);
   const { revision } = await appendRevision(userId, designId, async (_current, currentRev) => {
     if (currentRev !== r.base_rev) throw new AuthError('The design changed while the agent was working. Discard this run and start again.', 409);
     return {
-      request: `Fix the issues${b && a ? ` (errors ${b.errors}→${a.errors}, warnings ${b.warnings}→${a.warnings})` : ''}`,
+      request:
+        r.kind === 'brief'
+          ? `Meet the brief${b && a && a.briefTotal ? ` (${b.briefMet ?? 0}/${b.briefTotal} → ${a.briefMet ?? 0}/${a.briefTotal} met)` : ''}`
+          : `Fix the issues${b && a ? ` (errors ${b.errors}→${a.errors}, warnings ${b.warnings}→${a.warnings})` : ''}`,
       summary,
       ops,
       model: r.model,

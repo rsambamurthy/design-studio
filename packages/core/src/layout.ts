@@ -220,7 +220,7 @@ export function adjustToilets(input: BuildingModel, wanted: number, notes: strin
       );
     }
     try {
-      m = applyOperation(m, parseOperation('add_toilet', { roomId: bed.id })).model;
+      m = applyOperation(m, parseOperation('add_toilet', { roomId: bed.id, beside: false })).model;
       notes.push(bed.kind === 'bedroom' ? `toilet attached to ${bed.name}` : `common toilet off ${bed.name}`);
     } catch {
       failures.push(bed.id);

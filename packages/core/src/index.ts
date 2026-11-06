@@ -16,3 +16,4 @@ export * from './cores';
 export * from './blocks';
 export * from './fixtures';
 export * from './fixer';
+export * from './brief';

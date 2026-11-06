@@ -69,6 +69,22 @@ export const OperationSchemas = {
   set_room_position: z
     .object({ roomId: id('room block'), x: z.number().describe('Plan x (mm) of the block\'s west wall centre line'), y: z.number().describe('Plan y (mm) of its north wall centre line') })
     .describe('Put a room block at an exact plan position (used by dragging in the app). Prefer move_room or place_room_against in conversation.'),
+  set_brief: z
+    .object({
+      items: z
+        .array(
+          z.object({
+            type: z.enum(['outer_wall', 'window', 'attached_toilet', 'zone', 'min_size', 'next_to']),
+            rooms: z.string().describe('"bedrooms", "toilets", "wet rooms", "habitable", a room kind like "kitchen" or "pooja", or a room name'),
+            zone: z.enum(['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'centre']).optional(),
+            width: z.string().optional(),
+            depth: z.string().optional(),
+            other: z.string().optional().describe('For next_to: the other room(s)'),
+          }),
+        )
+        .max(30),
+    })
+    .describe('Replace the design brief: the checkable requirements the plan should meet (shown as a checklist; the Meet the brief agent works towards it).'),
   rotate_room: z
     .object({ roomId: id('room block'), degrees: z.enum(['90', '-90', '180']).default('90') })
     .describe('Turn a room block about its centre (e.g. make a vertical toilet horizontal). Doors, fixtures and furniture turn with it.'),
@@ -113,6 +129,7 @@ export const OperationSchemas = {
       roomId: id('bedroom (or other room) the toilet is attached to'),
       width: distance.optional().describe('Clear width of the toilet (default 5\')'),
       length: distance.optional().describe('Clear length of the toilet (default 7\'); any spare length becomes a dress area'),
+      beside: z.boolean().default(true).describe('If the room is too small to give up space, put a new toilet beside it in the open space instead'),
     })
     .describe('Add a toilet attached to a room: carved from the room along a wall without its door or window, with a door from the room, a ventilator on an outer wall, and a dress area if there is spare length.'),
   split_room: z

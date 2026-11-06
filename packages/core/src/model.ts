@@ -170,6 +170,8 @@ export interface BuildingModel {
   furniture: FurnitureItem[];
   /** Stairs and lifts. Optional: older designs have none. */
   cores?: CoreElement[];
+  /** What the house must have, as checkable items (see brief.ts). */
+  brief?: { items: { type: string; rooms: string; [k: string]: string }[] };
   revision: number;
 }
 

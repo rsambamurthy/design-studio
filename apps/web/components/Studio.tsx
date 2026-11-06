@@ -5,6 +5,7 @@ import {
   buildableRect,
   buildingOuterRect,
   diffModels,
+  checkBrief,
   coincidentSides,
   fixedWallUnder,
   formatLength,
@@ -65,7 +66,7 @@ interface Share {
   createdAt: string;
 }
 
-type Tab = 'assistant' | 'site' | 'versions' | 'share';
+type Tab = 'assistant' | 'brief' | 'site' | 'versions' | 'share';
 
 /** Example requests built from the design's own rooms, so they always make sense. */
 function examplesFor(m: BuildingModel): string[] {
@@ -198,12 +199,12 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     return () => clearInterval(t);
   }, [run?.id, run?.status, design.id]);
 
-  async function startFix() {
+  async function startFix(kind: 'fix' | 'brief' = 'fix') {
     setRunBusy(true);
     setSelected(null);
     setSelectedDoor(null);
     try {
-      const r = await api<{ run: AgentRunView }>(`/api/designs/${design.id}/agent`, { method: 'POST' });
+      const r = await api<{ run: AgentRunView }>(`/api/designs/${design.id}/agent`, { method: 'POST', json: { kind } });
       setRun(r.run);
     } catch (e) {
       say({ role: 'ai', text: e instanceof Error ? e.message : 'Could not start.', error: true });
@@ -224,7 +225,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
         applyDesign(r.design);
         setRedo([]);
         setRun(null);
-        say({ role: 'ai', text: `Kept the agent's fixes.`, saved: r.revision ?? undefined });
+        say({ role: 'ai', text: run.kind === 'brief' ? `Kept the agent's changes for the brief.` : `Kept the agent's fixes.`, saved: r.revision ?? undefined });
       } else if (action === 'discard') {
         setRun(null);
       } else {
@@ -465,7 +466,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
       <div className="workspace">
         <section className="card side-card" aria-label="Assistant, versions and sharing">
           <div className="tabs side-tabs" role="tablist">
-            {(['assistant', 'site', 'versions', 'share'] as Tab[]).map((t) => (
+            {(['assistant', 'brief', 'site', 'versions', 'share'] as Tab[]).map((t) => (
               <button
                 key={t}
                 role="tab"
@@ -476,7 +477,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
                   if (t === 'site') setPlanMode('site');
                 }}
               >
-                {t === 'assistant' ? 'Assistant' : t === 'site' ? 'Site' : t === 'versions' ? `Versions (${design.revisions.length})` : 'Share'}
+                {t === 'assistant' ? 'Assistant' : t === 'brief' ? 'Brief' : t === 'site' ? 'Site' : t === 'versions' ? `Versions (${design.revisions.length})` : 'Share'}
               </button>
             ))}
           </div>
@@ -528,6 +529,18 @@ export default function Studio({ email, initial }: { email: string; initial: Des
               </button>
               <p className="chat-hint">Enter sends · Alt+Enter adds another instruction; they run one after the other, each saved as its own revision.</p>
             </div>
+          )}
+
+          {tab === 'brief' && (
+            <BriefPanel
+              key={`${design.id}-${design.currentRev}`}
+              model={design.model}
+              draft={runActive && run!.kind === 'brief' ? run!.model : undefined}
+              busy={busy || runBusy || !!viewing}
+              running={runActive}
+              onSave={(items) => void applyOps(items.length ? 'Updated the brief' : 'Cleared the brief', [{ op: 'set_brief', args: { items } }], false)}
+              onMeet={() => void startFix('brief')}
+            />
           )}
 
           {tab === 'site' && (
@@ -718,7 +731,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
           {runActive && <AgentPanel run={run!} busy={runBusy} onAction={(a) => void runAction(a)} />}
           <div className="checks">
             {!runActive && !viewing && counts.error + counts.warning > 0 && (
-              <button type="button" className="btn-primary btn-sm fix-btn" onClick={() => void startFix()} disabled={runBusy || busy}>
+              <button type="button" className="btn-primary btn-sm fix-btn" onClick={() => void startFix('fix')} disabled={runBusy || busy}>
                 ✦ Fix the issues
               </button>
             )}
@@ -952,12 +965,13 @@ function downloadChat(name: string, log: ChatEntry[]) {
 /** What the browser sees of an agent run. */
 interface AgentRunView {
   id: string;
+  kind: 'fix' | 'brief';
   status: 'running' | 'done' | 'failed' | 'kept' | 'discarded';
   outcome: 'fixed' | 'stuck' | 'limit' | 'stopped' | 'nothing' | null;
   model: BuildingModel;
   steps: { n: number; why: string; summary: string; accepted: boolean; reason?: string; errors: number; warnings: number }[];
-  before: { errors: number; warnings: number } | null;
-  after: { errors: number; warnings: number } | null;
+  before: { errors: number; warnings: number; briefMet?: number; briefTotal?: number } | null;
+  after: { errors: number; warnings: number; briefMet?: number; briefTotal?: number } | null;
   remaining: { message: string; severity: string }[] | null;
   message: string | null;
   mode: string | null;
@@ -972,12 +986,15 @@ function AgentPanel({ run, busy, onAction }: { run: AgentRunView; busy: boolean;
   const running = run.status === 'running';
   const last = run.steps[run.steps.length - 1];
   const now = run.after ?? (last ? { errors: last.errors, warnings: last.warnings } : null);
+  const brief = run.kind === 'brief';
   const headline = running
     ? run.stopRequested
       ? 'Stopping after this step…'
-      : `Fixing issues… ${kept.length} change${kept.length === 1 ? '' : 's'} so far`
+      : `${brief ? 'Working on the brief' : 'Fixing issues'}… ${kept.length} change${kept.length === 1 ? '' : 's'} so far`
     : run.outcome === 'fixed'
-      ? 'All errors and warnings fixed'
+      ? brief
+        ? 'Brief met, with no errors or warnings'
+        : 'All errors and warnings fixed'
       : run.outcome === 'nothing'
         ? 'Nothing to fix'
         : run.outcome === 'stopped'
@@ -993,6 +1010,7 @@ function AgentPanel({ run, busy, onAction }: { run: AgentRunView; busy: boolean;
         <strong>{headline}</strong>
         {run.before && now && (
           <span className="agent-counts">
+            {brief && run.before.briefTotal ? `Brief ${run.before.briefMet ?? 0}/${run.before.briefTotal} → ${run.after?.briefMet ?? run.before.briefMet ?? 0}/${run.before.briefTotal} · ` : ''}
             Errors {run.before.errors} → {now.errors} · Warnings {run.before.warnings} → {now.warnings}
           </span>
         )}
@@ -1051,6 +1069,106 @@ function AgentPanel({ run, busy, onAction }: { run: AgentRunView; busy: boolean;
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+type BriefItemInput = { type: string; rooms: string; zone?: string; width?: string; depth?: string; other?: string };
+
+const ZONE_NAMES = ['north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'centre'];
+
+/** The brief as a checklist: choose items, save (a revision), see what is met, run the agent. */
+function BriefPanel({
+  model,
+  draft,
+  busy,
+  running,
+  onSave,
+  onMeet,
+}: {
+  model: BuildingModel;
+  draft?: BuildingModel;
+  busy: boolean;
+  running: boolean;
+  onSave: (items: BriefItemInput[]) => void;
+  onMeet: () => void;
+}) {
+  const saved = (model.brief?.items ?? []) as BriefItemInput[];
+  const has = (type: string, rooms: string) => saved.find((i) => i.type === type && i.rooms === rooms);
+  const [outer, setOuter] = useState(!!has('outer_wall', 'bedrooms'));
+  const [windows, setWindows] = useState(!!has('window', 'bedrooms'));
+  const [attached, setAttached] = useState(!!has('attached_toilet', 'bedrooms'));
+  const [wet, setWet] = useState(!!has('outer_wall', 'wet rooms'));
+  const [kitchen, setKitchen] = useState(has('zone', 'kitchen')?.zone ?? '');
+  const [pooja, setPooja] = useState(has('zone', 'pooja')?.zone ?? '');
+  const minItem = has('min_size', 'bedrooms');
+  const [minOn, setMinOn] = useState(!!minItem);
+  const [minW, setMinW] = useState(minItem?.width ?? "10'");
+  const [minD, setMinD] = useState(minItem?.depth ?? "11'");
+
+  const items: BriefItemInput[] = [
+    ...(outer ? [{ type: 'outer_wall', rooms: 'bedrooms' }] : []),
+    ...(windows ? [{ type: 'window', rooms: 'bedrooms' }] : []),
+    ...(attached ? [{ type: 'attached_toilet', rooms: 'bedrooms' }] : []),
+    ...(wet ? [{ type: 'outer_wall', rooms: 'wet rooms' }] : []),
+    ...(kitchen ? [{ type: 'zone', rooms: 'kitchen', zone: kitchen }] : []),
+    ...(pooja ? [{ type: 'zone', rooms: 'pooja', zone: pooja }] : []),
+    ...(minOn ? [{ type: 'min_size', rooms: 'bedrooms', width: minW, depth: minD }] : []),
+  ];
+  const dirty = JSON.stringify(items) !== JSON.stringify(saved.map((i) => Object.fromEntries(Object.entries(i).filter(([, v]) => v !== undefined))));
+  const status = checkBrief(draft ?? model);
+  const met = status.filter((r) => r.met).length;
+  const applicable = status.filter((r) => !r.empty).length;
+  return (
+    <div className="brief-panel">
+      <p className="brief-intro">Tick what the house must have. Save it, then let the agent rearrange the plan to meet it. You keep or discard the result.</p>
+      <div className="brief-list">
+        <label><input type="checkbox" checked={outer} onChange={(e) => setOuter(e.target.checked)} /> Every bedroom on an outer wall</label>
+        <label><input type="checkbox" checked={windows} onChange={(e) => setWindows(e.target.checked)} /> Every bedroom has a window</label>
+        <label><input type="checkbox" checked={attached} onChange={(e) => setAttached(e.target.checked)} /> Every bedroom has an attached toilet</label>
+        <label><input type="checkbox" checked={wet} onChange={(e) => setWet(e.target.checked)} /> Toilets and kitchen on an outer wall (pipes)</label>
+        <label className="brief-row">
+          <input type="checkbox" checked={!!kitchen} onChange={(e) => setKitchen(e.target.checked ? 'south-east' : '')} /> Kitchen in the
+          <select value={kitchen || 'south-east'} disabled={!kitchen} onChange={(e) => setKitchen(e.target.value)} aria-label="Kitchen zone">
+            {ZONE_NAMES.map((z) => <option key={z} value={z}>{z}</option>)}
+          </select>
+        </label>
+        <label className="brief-row">
+          <input type="checkbox" checked={!!pooja} onChange={(e) => setPooja(e.target.checked ? 'north-east' : '')} /> Pooja in the
+          <select value={pooja || 'north-east'} disabled={!pooja} onChange={(e) => setPooja(e.target.value)} aria-label="Pooja zone">
+            {ZONE_NAMES.map((z) => <option key={z} value={z}>{z}</option>)}
+          </select>
+        </label>
+        <label className="brief-row">
+          <input type="checkbox" checked={minOn} onChange={(e) => setMinOn(e.target.checked)} /> Every bedroom at least
+          <input value={minW} onChange={(e) => setMinW(e.target.value)} disabled={!minOn} aria-label="Minimum bedroom width" /> ×
+          <input value={minD} onChange={(e) => setMinD(e.target.value)} disabled={!minOn} aria-label="Minimum bedroom depth" />
+        </label>
+      </div>
+      <div className="brief-btns">
+        <button type="button" className="btn-secondary btn-sm" disabled={busy || running || !dirty} onClick={() => onSave(items)}>
+          Save brief
+        </button>
+        <button type="button" className="btn-primary btn-sm" disabled={busy || running || dirty || saved.length === 0 || (applicable > 0 && met === applicable)} onClick={onMeet} title={dirty ? 'Save the brief first' : undefined}>
+          ✦ Meet the brief
+        </button>
+      </div>
+      {status.length > 0 && (
+        <div className="brief-status">
+          <div className="brief-status-head">
+            {draft ? 'Agent draft: ' : ''}{met} of {applicable} met
+          </div>
+          <ul>
+            {status.map((r, k) => (
+              <li key={k} className={r.met ? 'met' : r.empty ? 'empty' : 'unmet'}>
+                <span className="mark">{r.met ? '✓' : r.empty ? '–' : '✗'}</span> {r.label}
+                {r.empty && <em> (no such rooms yet)</em>}
+                {!r.met && r.failing.length > 0 && <div className="why">{r.failing.map((f) => f.why).join('; ')}</div>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

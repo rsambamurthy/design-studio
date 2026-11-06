@@ -1,5 +1,5 @@
 import { openRun, startFixRun } from '@/lib/fixAgent';
-import { withUser } from '@/lib/http';
+import { readJson, withUser } from '@/lib/http';
 
 export const runtime = 'nodejs';
 
@@ -12,7 +12,8 @@ export const GET = withUser<Ctx>(async (user, _req, ctx) => {
 });
 
 /** Start "Fix the issues". Returns at once; poll the run for progress. */
-export const POST = withUser<Ctx>(async (user, _req, ctx) => {
+export const POST = withUser<Ctx>(async (user, req, ctx) => {
   const { id } = await ctx.params;
-  return Response.json({ run: await startFixRun(user.id, id) });
+  const body = await readJson(req);
+  return Response.json({ run: await startFixRun(user.id, id, body.kind === 'brief' ? 'brief' : 'fix') });
 });
