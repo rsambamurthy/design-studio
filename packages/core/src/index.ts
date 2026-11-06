@@ -17,3 +17,4 @@ export * from './blocks';
 export * from './fixtures';
 export * from './fixer';
 export * from './brief';
+export * from './boq';

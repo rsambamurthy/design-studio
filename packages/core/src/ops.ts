@@ -86,6 +86,14 @@ export const OperationSchemas = {
         .max(30),
     })
     .describe('Replace the design brief: the checkable requirements the plan should meet (shown as a checklist; the Meet the brief agent works towards it).'),
+  set_costing: z
+    .object({
+      grades: z.record(z.string(), z.enum(['basic', 'standard', 'premium'])).optional().describe('Grade per rate-card item id (structure, wall-230, wall-115, plaster-in, plaster-out, floor, floor-wet, dado, paint-in, paint-out, door-main, door, door-toilet, window, sanitary, kitchen, electrical, plumbing)'),
+      rates: z.record(z.string(), z.number().min(0).nullable()).optional().describe('Custom ₹ rate per unit for an item; null goes back to the grade rate'),
+      budget: z.number().min(0).nullable().optional().describe('Total budget in ₹; null clears it'),
+      contingencyPct: z.number().min(0).max(30).optional(),
+    })
+    .describe('Change the cost estimate: grade of an item (basic/standard/premium), a custom rate, the budget or the contingency. Merges with what is set.'),
   rotate_room: z
     .object({ roomId: id('room block'), degrees: z.enum(['90', '-90', '180']).default('90') })
     .describe('Turn a room block about its centre (e.g. make a vertical toilet horizontal). Doors, fixtures and furniture turn with it.'),

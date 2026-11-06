@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 
-export type NavKey = 'designs' | 'studio' | 'site' | 'versions' | 'share';
+export type NavKey = 'designs' | 'studio' | 'site' | 'versions' | 'share' | 'cost';
 
 interface Props {
   email: string;
@@ -14,7 +14,7 @@ interface Props {
   children: ReactNode;
 }
 
-const SOON = ['Elevations & 3D', 'Schedules', 'BOQ & Cost', 'Catalogue', 'Rule Checks'];
+const SOON = ['Elevations & 3D', 'Schedules', 'Catalogue', 'Rule Checks'];
 
 export default function AppShell({ email, chip, active, designId, onNav, children }: Props) {
   async function logout() {
@@ -57,6 +57,7 @@ export default function AppShell({ email, chip, active, designId, onNav, childre
           {designId && item('site', 'Plot & Setbacks', 'P')}
           {designId && item('versions', 'Versions', 'V')}
           {designId && item('share', 'Share', 'S')}
+          {designId && item('cost', 'BOQ & Cost', 'B')}
           {SOON.map((label) => (
             <div key={label} className="sa-mg disabled" title="Coming in a later slice">
               <span className="sa-mg-ic">{label[0]}</span>

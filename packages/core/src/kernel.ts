@@ -50,6 +50,7 @@ import { parseOperation as parseOp, type Operation } from './ops';
 import { doorSwingRect } from './checks';
 import { clampBlockInside, coincidentSides, resizeBlockSide, rotateBlock, setBlockClearSize, shellAxisRect, snapBlock, splitBlock, translateBlock } from './blocks';
 import { fitOutRoom } from './fixtures';
+import { RATE_CARD } from './boq';
 import { BriefSchema, briefLabel } from './brief';
 import { CORNERS, DEFAULT_FLOOR_HEIGHT, LIFT_SHAFTS, coreFootprint, coresOf, enclosureOf, placeInCorner, settleCore, sizeStair, type Corner } from './cores';
 import { formatLength, parseLength } from './units';
@@ -702,6 +703,37 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       say(fx, { x: 1, y: 0 });
       say(fy, { x: 0, y: 1 });
       ctx.summary = words.length ? `Moved ${room.name} ${words.join(' and ')}.` : `${room.name} stays where it is.`;
+      break;
+    }
+
+    case 'set_costing': {
+      const c = { ...(model.costing ?? {}) };
+      if (args.grades) c.grades = { ...(c.grades ?? {}), ...args.grades };
+      if (args.rates) {
+        const rates = { ...(c.rates ?? {}) };
+        for (const [k, v] of Object.entries(args.rates)) {
+          if (v === null || v === undefined) delete rates[k];
+          else rates[k] = v as number;
+        }
+        c.rates = rates;
+      }
+      if (args.budget !== undefined) {
+        if (args.budget === null) delete c.budget;
+        else c.budget = args.budget;
+      }
+      if (args.contingencyPct !== undefined) c.contingencyPct = args.contingencyPct;
+      for (const id of Object.keys({ ...(args.grades ?? {}), ...(args.rates ?? {}) })) if (!RATE_CARD.some((it) => it.id === id)) throw new ModelError(`There is no cost item "${id}".`);
+      model.costing = c;
+      ctx.touch('costing');
+      const said: string[] = [];
+      for (const [k, v] of Object.entries(args.grades ?? {})) {
+        const it = RATE_CARD.find((x) => x.id === k)!;
+        said.push(`${it.label}: ${it.grades[v as 'basic'].name}`);
+      }
+      for (const [k, v] of Object.entries(args.rates ?? {})) said.push(`${RATE_CARD.find((x) => x.id === k)!.label}: ${v === null ? 'grade rate' : `₹${Number(v).toLocaleString('en-IN')} per unit`}`);
+      if (args.budget !== undefined) said.push(args.budget === null ? 'budget cleared' : `budget ₹${Number(args.budget).toLocaleString('en-IN')}`);
+      if (args.contingencyPct !== undefined) said.push(`contingency ${args.contingencyPct}%`);
+      ctx.summary = `Cost: ${said.join('; ') || 'no change'}.`;
       break;
     }
 

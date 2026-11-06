@@ -172,6 +172,8 @@ export interface BuildingModel {
   cores?: CoreElement[];
   /** What the house must have, as checkable items (see brief.ts). */
   brief?: { items: { type: string; rooms: string; [k: string]: string }[] };
+  /** Cost settings (see boq.ts): chosen grades, custom rates, budget. */
+  costing?: { grades?: Partial<Record<string, 'basic' | 'standard' | 'premium'>>; rates?: Partial<Record<string, number>>; budget?: number; contingencyPct?: number };
   revision: number;
 }
 

@@ -1,11 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import {
   buildableRect,
   buildingOuterRect,
   diffModels,
   checkBrief,
+  costPlan,
+  fitBudget,
+  formatInr,
+  RATE_CARD,
+  type BudgetPlan,
   layoutOptions,
   type LayoutOption,
   coincidentSides,
@@ -68,7 +73,7 @@ interface Share {
   createdAt: string;
 }
 
-type Tab = 'assistant' | 'brief' | 'site' | 'versions' | 'share';
+type Tab = 'assistant' | 'brief' | 'cost' | 'site' | 'versions' | 'share';
 
 /** Example requests built from the design's own rooms, so they always make sense. */
 function examplesFor(m: BuildingModel): string[] {
@@ -457,10 +462,10 @@ export default function Studio({ email, initial }: { email: string; initial: Des
 
   const shareUrl = (t: string) => `${typeof window === 'undefined' ? '' : window.location.origin}/s/${t}`;
   const onNav = (k: NavKey) => {
-    setTab(k === 'versions' ? 'versions' : k === 'share' ? 'share' : k === 'site' ? 'site' : 'assistant');
+    setTab(k === 'versions' ? 'versions' : k === 'share' ? 'share' : k === 'site' ? 'site' : k === 'cost' ? 'cost' : 'assistant');
     if (k === 'site') setPlanMode('site');
   };
-  const navActive: NavKey = tab === 'versions' ? 'versions' : tab === 'share' ? 'share' : tab === 'site' ? 'site' : 'studio';
+  const navActive: NavKey = tab === 'versions' ? 'versions' : tab === 'share' ? 'share' : tab === 'site' ? 'site' : tab === 'cost' ? 'cost' : 'studio';
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -500,7 +505,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
       <div className="workspace">
         <section className="card side-card" aria-label="Assistant, versions and sharing">
           <div className="tabs side-tabs" role="tablist">
-            {(['assistant', 'brief', 'site', 'versions', 'share'] as Tab[]).map((t) => (
+            {(['assistant', 'brief', 'cost', 'site', 'versions', 'share'] as Tab[]).map((t) => (
               <button
                 key={t}
                 role="tab"
@@ -511,7 +516,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
                   if (t === 'site') setPlanMode('site');
                 }}
               >
-                {t === 'assistant' ? 'Assistant' : t === 'brief' ? 'Brief' : t === 'site' ? 'Site' : t === 'versions' ? `Versions (${design.revisions.length})` : 'Share'}
+                {t === 'assistant' ? 'Assistant' : t === 'brief' ? 'Brief' : t === 'cost' ? 'Cost' : t === 'site' ? 'Site' : t === 'versions' ? `Versions (${design.revisions.length})` : 'Share'}
               </button>
             ))}
           </div>
@@ -579,6 +584,15 @@ export default function Studio({ email, initial }: { email: string; initial: Des
               options={shownOptions}
               preview={preview}
               onPreview={setPreview}
+            />
+          )}
+
+          {tab === 'cost' && (
+            <CostPanel
+              key={`${design.id}-${design.currentRev}`}
+              model={model}
+              editable={!busy && !viewing && !runActive && !previewOpt}
+              onOps={(request, ops) => void applyOps(request, ops, false)}
             />
           )}
 
@@ -1337,5 +1351,156 @@ function MiniPlan({ model }: { model: BuildingModel }) {
           );
         })}
     </svg>
+  );
+}
+
+type CostOp = { op: 'set_costing'; args: Record<string, unknown> };
+
+/** BOQ and cost: quantities from the plan, a grade (or custom rate) per item, budget and "Fit my budget". */
+function CostPanel({ model, editable, onOps }: { model: BuildingModel; editable: boolean; onOps: (request: string, ops: CostOp[]) => void }) {
+  const boq = costPlan(model);
+  const [budgetText, setBudgetText] = useState(boq.budget ? String(Math.round(boq.budget / 1e5 * 10) / 10) : '');
+  const [fit, setFit] = useState<BudgetPlan | null>(null);
+  const [rateEdit, setRateEdit] = useState<{ id: string; text: string } | null>(null);
+  const budgetInr = Math.round(parseFloat(budgetText) * 1e5);
+  const budgetOk = Number.isFinite(budgetInr) && budgetInr > 0;
+  const groups = [...new Set(boq.lines.map((l) => l.group))];
+  const over = boq.budget ? boq.total - boq.budget : 0;
+  const qtyText = (q: number, unit: string) => `${unit === 'no.' || unit === 'set' || unit === 'point' || unit === 'sq ft' ? Math.round(q).toLocaleString('en-IN') : q.toLocaleString('en-IN', { maximumFractionDigits: 1 })} ${unit}`;
+  return (
+    <div className="cost-panel">
+      <div className="cost-total">
+        <div>
+          <div className="cost-big">{formatInr(boq.total)}</div>
+          <div className="cost-sub">
+            {boq.builtUpSqft.toLocaleString('en-IN')} sq ft built-up · ₹{boq.perSqft.toLocaleString('en-IN')} per sq ft · includes {boq.contingencyPct}% contingency
+          </div>
+        </div>
+        {boq.budget ? (
+          <div className={`cost-budget-tag ${over > 0 ? 'over' : 'ok'}`}>{over > 0 ? `${formatInr(over)} over budget` : `${formatInr(-over)} under budget`}</div>
+        ) : null}
+      </div>
+      <div className="cost-budget">
+        <label>
+          Budget ₹ <input value={budgetText} onChange={(e) => { setBudgetText(e.target.value); setFit(null); }} inputMode="decimal" aria-label="Budget in lakhs" placeholder="e.g. 45" /> lakh
+        </label>
+        <button type="button" className="btn-secondary btn-sm" disabled={!editable || !budgetOk || budgetInr === boq.budget} onClick={() => onOps(`Budget ${formatInr(budgetInr)}`, [{ op: 'set_costing', args: { budget: budgetInr } }])}>
+          Save budget
+        </button>
+        <button type="button" className="btn-primary btn-sm" disabled={!editable || !budgetOk} onClick={() => setFit(fitBudget(model, budgetInr))}>
+          ✦ Fit my budget
+        </button>
+      </div>
+      {fit && (
+        <div className="cost-fit" aria-label="Budget suggestions">
+          <div className="cost-fit-head">
+            {fit.steps.length === 0
+              ? fit.met
+                ? `Already within ${formatInr(fit.budget)}; nothing to change.`
+                : `Nothing more to step down.`
+              : `${fit.steps.length} change${fit.steps.length === 1 ? '' : 's'}: ${formatInr(fit.before)} → ${formatInr(fit.after)}`}
+          </div>
+          <ul>
+            {fit.steps.map((st) => (
+              <li key={st.id}>
+                <b>{st.label}:</b> {st.from} → {st.to} <span className="saves">saves {formatInr(st.saves)}</span>
+              </li>
+            ))}
+          </ul>
+          {!fit.met && (
+            <p className="cost-fit-gap">
+              Still {formatInr(fit.gap)} over with finishes at their simplest. That is about {fit.sqftToCut.toLocaleString('en-IN')} sq ft less built-up area, or a bigger budget.
+            </p>
+          )}
+          <div className="brief-btns">
+            {fit.steps.length > 0 && (
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                disabled={!editable}
+                onClick={() => {
+                  const grades = Object.fromEntries(fit.steps.map((st) => [st.id, fit.grades[st.id]]));
+                  onOps(`Fit my budget (${formatInr(fit.budget)})`, [{ op: 'set_costing', args: { grades, budget: fit.budget } }]);
+                }}
+              >
+                Use these choices
+              </button>
+            )}
+            <button type="button" className="btn-secondary btn-sm" onClick={() => setFit(null)}>Close</button>
+          </div>
+        </div>
+      )}
+      <div className="cost-list" role="table" aria-label="Bill of quantities">
+        {groups.map((grp) => (
+          <div key={grp} className="cost-grp" role="rowgroup">
+            <div className="cost-grp-head" role="row">
+              <span>{grp}</span>
+              <span>{formatInr(boq.lines.filter((l) => l.group === grp).reduce((a, l) => a + l.amount, 0))}</span>
+            </div>
+            {boq.lines
+              .filter((l) => l.group === grp)
+              .map((l) => {
+                const item = RATE_CARD.find((x) => x.id === l.id)!;
+                return (
+                  <div key={l.id} className="cost-row" role="row">
+                    <div className="cost-row-top">
+                      <span>{l.label}</span>
+                      <b>{formatInr(l.amount)}</b>
+                    </div>
+                    <div className="cost-row-sub">
+                      {rateEdit?.id === l.id ? (
+                        <form
+                          className="rate-form"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            const v = Math.round(Number(rateEdit.text.replace(/[,₹\s]/g, '')));
+                            if (Number.isFinite(v) && v >= 0) onOps(`${l.label}: ₹${v.toLocaleString('en-IN')} per ${l.unit}`, [{ op: 'set_costing', args: { rates: { [l.id]: v } } }]);
+                            setRateEdit(null);
+                          }}
+                        >
+                          {qtyText(l.qty, l.unit)} × ₹
+                          <input autoFocus value={rateEdit.text} onChange={(e) => setRateEdit({ id: l.id, text: e.target.value })} aria-label={`${l.label} rate`} />
+                          <button type="submit" className="btn-primary btn-sm">Set</button>
+                          <button type="button" className="link-btn" onClick={() => setRateEdit(null)}>Cancel</button>
+                        </form>
+                      ) : (
+                        <span className="cost-calc">
+                          {qtyText(l.qty, l.unit)} × ₹{l.rate.toLocaleString('en-IN')}/{l.unit}
+                        </span>
+                      )}
+                      <select
+                        aria-label={`${l.label} choice`}
+                        value={l.custom ? 'custom' : l.grade}
+                        disabled={!editable}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === 'custom') setRateEdit({ id: l.id, text: String(l.rate) });
+                          else onOps(`${l.label}: ${item.grades[v as 'basic'].name}`, [{ op: 'set_costing', args: { grades: { [l.id]: v }, ...(l.custom ? { rates: { [l.id]: null } } : {}) } }]);
+                        }}
+                      >
+                        {(['basic', 'standard', 'premium'] as const).map((gr) => (
+                          <option key={gr} value={gr}>
+                            {item.grades[gr].name}
+                          </option>
+                        ))}
+                        <option value="custom">Custom rate…</option>
+                      </select>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        ))}
+        <div className="cost-grp-head" role="row">
+          <span>Contingency {boq.contingencyPct}%</span>
+          <span>{formatInr(boq.contingency)}</span>
+        </div>
+        <div className="cost-grand" role="row">
+          <span>Total</span>
+          <span>{formatInr(boq.total)}</span>
+        </div>
+      </div>
+      <p className="cost-note">Indicative Chennai rates (2026) for an RCC framed house, measured from this plan with a 10' floor height. Choose a grade or set your own rate per item; changes are saved as revisions like any other edit. Get a contractor's quote before committing.</p>
+    </div>
   );
 }
