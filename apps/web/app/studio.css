@@ -364,7 +364,7 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .agent-btns { display: flex; gap: 8px; margin-top: 12px; }
 
 /* ---------- Brief ---------- */
-.brief-panel { display: flex; flex-direction: column; gap: 12px; }
+.brief-panel { display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
 .brief-intro { margin: 0; font-size: 13px; color: var(--color-muted); }
 .brief-list { display: flex; flex-direction: column; gap: 8px; }
 .brief-list label { display: flex; align-items: center; gap: 8px; font-size: 13.5px; flex-wrap: wrap; }
@@ -381,3 +381,12 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .brief-status .unmet .mark { color: #b91c1c; }
 .brief-status .empty { color: var(--color-muted); }
 .brief-status .why { margin-left: 20px; font-size: 12px; color: var(--color-muted); }
+.brief-sub { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--color-muted); display: flex; align-items: center; justify-content: space-between; }
+.brief-presets { display: flex; gap: 6px; white-space: nowrap; }
+.brief-presets button { text-transform: none; letter-spacing: 0; font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--color-border, #d4d7e3); background: #fff; cursor: pointer; color: var(--theme-primary); font-weight: 600; }
+.brief-counts { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 22px; }
+.brief-count { display: flex; align-items: center; gap: 6px; font-size: 13.5px; }
+.brief-count span { flex: 1; }
+.brief-count button { display: grid; place-items: center; padding: 0; flex: none; width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--color-border, #d4d7e3); background: #fff; cursor: pointer; font-size: 15px; line-height: 1; }
+.brief-count button:disabled { opacity: .4; cursor: default; }
+.brief-count b { min-width: 16px; text-align: center; }

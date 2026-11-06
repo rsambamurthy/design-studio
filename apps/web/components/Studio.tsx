@@ -1010,7 +1010,7 @@ function AgentPanel({ run, busy, onAction }: { run: AgentRunView; busy: boolean;
         <strong>{headline}</strong>
         {run.before && now && (
           <span className="agent-counts">
-            {brief && run.before.briefTotal ? `Brief ${run.before.briefMet ?? 0}/${run.before.briefTotal} → ${run.after?.briefMet ?? run.before.briefMet ?? 0}/${run.before.briefTotal} · ` : ''}
+            {brief && run.before.briefTotal ? `Brief ${run.before.briefMet ?? 0}/${run.before.briefTotal} → ${run.after?.briefMet ?? run.before.briefMet ?? 0}/${run.after?.briefTotal ?? run.before.briefTotal} · ` : ''}
             Errors {run.before.errors} → {now.errors} · Warnings {run.before.warnings} → {now.warnings}
           </span>
         )}
@@ -1073,7 +1073,7 @@ function AgentPanel({ run, busy, onAction }: { run: AgentRunView; busy: boolean;
   );
 }
 
-type BriefItemInput = { type: string; rooms: string; zone?: string; width?: string; depth?: string; other?: string };
+type BriefItemInput = { type: string; rooms: string; zone?: string; width?: string; depth?: string; other?: string; n?: number };
 
 const ZONE_NAMES = ['north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'centre'];
 
@@ -1101,12 +1101,34 @@ function BriefPanel({
   const [wet, setWet] = useState(!!has('outer_wall', 'wet rooms'));
   const [kitchen, setKitchen] = useState(has('zone', 'kitchen')?.zone ?? '');
   const [pooja, setPooja] = useState(has('zone', 'pooja')?.zone ?? '');
+  const countOf = (rooms: string) => Number(has('count', rooms)?.n ?? 0);
+  const [beds, setBeds] = useState(countOf('bedrooms'));
+  const [toilets, setToilets] = useState(countOf('toilets'));
+  const [kitchens, setKitchens] = useState(countOf('kitchen'));
+  const [poojas, setPoojas] = useState(countOf('pooja'));
+  const [stores, setStores] = useState(countOf('store'));
   const minItem = has('min_size', 'bedrooms');
   const [minOn, setMinOn] = useState(!!minItem);
   const [minW, setMinW] = useState(minItem?.width ?? "10'");
   const [minD, setMinD] = useState(minItem?.depth ?? "11'");
 
+  const preset = (n: number) => {
+    setBeds(n);
+    setToilets(n);
+    setKitchens(1);
+    setPoojas(1);
+    setOuter(true);
+    setWindows(true);
+    setAttached(true);
+    setKitchen('south-east');
+    setPooja('north-east');
+  };
   const items: BriefItemInput[] = [
+    ...(beds ? [{ type: 'count', rooms: 'bedrooms', n: beds }] : []),
+    ...(toilets ? [{ type: 'count', rooms: 'toilets', n: toilets }] : []),
+    ...(kitchens ? [{ type: 'count', rooms: 'kitchen', n: kitchens }] : []),
+    ...(poojas ? [{ type: 'count', rooms: 'pooja', n: poojas }] : []),
+    ...(stores ? [{ type: 'count', rooms: 'store', n: stores }] : []),
     ...(outer ? [{ type: 'outer_wall', rooms: 'bedrooms' }] : []),
     ...(windows ? [{ type: 'window', rooms: 'bedrooms' }] : []),
     ...(attached ? [{ type: 'attached_toilet', rooms: 'bedrooms' }] : []),
@@ -1115,13 +1137,36 @@ function BriefPanel({
     ...(pooja ? [{ type: 'zone', rooms: 'pooja', zone: pooja }] : []),
     ...(minOn ? [{ type: 'min_size', rooms: 'bedrooms', width: minW, depth: minD }] : []),
   ];
-  const dirty = JSON.stringify(items) !== JSON.stringify(saved.map((i) => Object.fromEntries(Object.entries(i).filter(([, v]) => v !== undefined))));
+  const canon = (list: BriefItemInput[]) =>
+    list
+      .map((i) => Object.entries(i).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}=${String(v)}`).sort().join('&'))
+      .sort()
+      .join('|');
+  const dirty = canon(items) !== canon(saved);
   const status = checkBrief(draft ?? model);
   const met = status.filter((r) => r.met).length;
+  const missing = status.some((r) => r.item.type === 'count' && !r.met);
+  const stepper = (label: string, v: number, set: (n: number) => void, max: number) => (
+    <div className="brief-count">
+      <span>{label}</span>
+      <button type="button" aria-label={`Fewer ${label.toLowerCase()}`} onClick={() => set(Math.max(0, v - 1))} disabled={v === 0}>−</button>
+      <b aria-label={`${label} count`}>{v || '–'}</b>
+      <button type="button" aria-label={`More ${label.toLowerCase()}`} onClick={() => set(Math.min(max, v + 1))} disabled={v >= max}>+</button>
+    </div>
+  );
   const applicable = status.filter((r) => !r.empty).length;
   return (
     <div className="brief-panel">
-      <p className="brief-intro">Tick what the house must have. Save it, then let the agent rearrange the plan to meet it. You keep or discard the result.</p>
+      <p className="brief-intro">Say what the house needs and save it. The agent adds the missing rooms and rearranges the plan to meet the rest. You keep or discard the result.</p>
+      <div className="brief-sub">Rooms the plan needs <span className="brief-presets">{[2, 3, 4].map((n) => <button key={n} type="button" onClick={() => preset(n)}>{n} BHK</button>)}</span></div>
+      <div className="brief-counts">
+        {stepper('Bedrooms', beds, setBeds, 6)}
+        {stepper('Toilets', toilets, setToilets, 8)}
+        {stepper('Kitchen', kitchens, setKitchens, 2)}
+        {stepper('Pooja', poojas, setPoojas, 1)}
+        {stepper('Store', stores, setStores, 2)}
+      </div>
+      <div className="brief-sub">What every room must have</div>
       <div className="brief-list">
         <label><input type="checkbox" checked={outer} onChange={(e) => setOuter(e.target.checked)} /> Every bedroom on an outer wall</label>
         <label><input type="checkbox" checked={windows} onChange={(e) => setWindows(e.target.checked)} /> Every bedroom has a window</label>
@@ -1150,7 +1195,7 @@ function BriefPanel({
           Save brief
         </button>
         <button type="button" className="btn-primary btn-sm" disabled={busy || running || dirty || saved.length === 0 || (applicable > 0 && met === applicable)} onClick={onMeet} title={dirty ? 'Save the brief first' : undefined}>
-          ✦ Meet the brief
+          {missing ? '✦ Lay out the rooms' : '✦ Meet the brief'}
         </button>
       </div>
       {status.length > 0 && (
@@ -1163,7 +1208,7 @@ function BriefPanel({
               <li key={k} className={r.met ? 'met' : r.empty ? 'empty' : 'unmet'}>
                 <span className="mark">{r.met ? '✓' : r.empty ? '–' : '✗'}</span> {r.label}
                 {r.empty && <em> (no such rooms yet)</em>}
-                {!r.met && r.failing.length > 0 && <div className="why">{r.failing.map((f) => f.why).join('; ')}</div>}
+                {!r.met && r.failing.length > 0 && <div className="why">{(r.item.type === 'count' ? r.failing.slice(0, 1) : r.failing).map((f) => f.why).join('; ')}</div>}
               </li>
             ))}
           </ul>

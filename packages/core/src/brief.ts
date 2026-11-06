@@ -20,6 +20,7 @@ export type Zone = (typeof ZONES)[number];
 const rooms = z.string().min(1);
 
 export const BriefItemSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('count'), rooms, n: z.coerce.number().int().min(1).max(12) }),
   z.object({ type: z.literal('outer_wall'), rooms }),
   z.object({ type: z.literal('window'), rooms }),
   z.object({ type: z.literal('attached_toilet'), rooms }),
@@ -98,6 +99,8 @@ export interface BriefResult {
 export function briefLabel(item: BriefItem): string {
   const who = item.rooms.toLowerCase() === 'bedrooms' ? 'Every bedroom' : item.rooms.toLowerCase() === 'toilets' ? 'Every toilet' : item.rooms.toLowerCase() === 'wet rooms' ? 'Toilets and kitchen' : cap(item.rooms);
   switch (item.type) {
+    case 'count':
+      return countLabel(item.rooms, item.n);
     case 'outer_wall':
       return `${who} on an outer wall`;
     case 'window':
@@ -113,6 +116,20 @@ export function briefLabel(item: BriefItem): string {
   }
 }
 
+/** "3 bedrooms", "1 kitchen", "2 toilets". */
+export function countLabel(rooms: string, n: number): string {
+  const base = rooms.toLowerCase().replace(/s$/, '');
+  return `${n} ${base}${n === 1 ? '' : 's'}`;
+}
+
+/** The room kind a count item adds. */
+export function countKind(rooms: string): Room['kind'] {
+  const s = rooms.trim().toLowerCase().replace(/s$/, '');
+  if (s === 'bathroom') return 'toilet';
+  if (s === 'store') return 'other';
+  return (['bedroom', 'toilet', 'kitchen', 'pooja', 'lobby', 'service', 'balcony', 'dining'] as const).find((k) => k === s) ?? 'other';
+}
+
 function cap(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
@@ -122,6 +139,11 @@ export function checkBrief(model: BuildingModel, brief: Brief | undefined = read
   const u = model.displayUnits;
   return brief.items.map((item) => {
     const targets = selectRooms(model, item.rooms);
+    if (item.type === 'count') {
+      const short = Math.max(0, item.n - targets.length);
+      const failing = Array.from({ length: short }, (_, k) => ({ roomId: `count:${item.rooms}:${k}`, name: item.rooms, why: `${targets.length} of ${item.n} so far` }));
+      return { item, label: briefLabel(item), met: short === 0, failing, empty: false };
+    }
     const failing: BriefResult['failing'] = [];
     for (const r of targets) {
       let why: string | undefined;

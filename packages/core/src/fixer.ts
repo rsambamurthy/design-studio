@@ -6,11 +6,11 @@
  * guard rails (no rooms removed, room sizes within 6", site untouched).
  */
 import { runChecks, type Issue } from './checks';
-import { checkBrief, roomZone, selectRooms, type BriefItem } from './brief';
+import { checkBrief, countKind, readBrief, roomZone, selectRooms, type BriefItem } from './brief';
 import { parseLength } from './units';
 import { fixedWallUnder } from './model';
 import { roomClearRect } from './geometry';
-import { applyOperation } from './kernel';
+import { applyOperation, hasAttachedToilet } from './kernel';
 import { getWall, parseBlockWallId, type BuildingModel, type Room } from './model';
 import { parseOperation, type OperationName } from './ops';
 import { pointOnWall, wallDir } from './geometry';
@@ -102,13 +102,30 @@ export const fixObjective: Objective = {
 };
 
 /** Extra operations the brief agent may use (adding windows and attached toilets, swapping rooms). */
-export const BRIEF_OPS: OperationName[] = [...FIX_OPS, 'add_opening', 'add_toilet', 'swap_rooms'];
+export const BRIEF_OPS: OperationName[] = [...FIX_OPS, 'add_opening', 'add_toilet', 'swap_rooms', 'add_room'];
 
 /** Placement first (where rooms go), then what they need (toilets, windows). */
-const BRIEF_ORDER = ['zone', 'outer_wall', 'min_size', 'next_to', 'attached_toilet', 'window'];
+const BRIEF_ORDER = ['count', 'zone', 'outer_wall', 'min_size', 'next_to', 'attached_toilet', 'count-toilet', 'window'];
+// Rooms with a fixed place (kitchen, pooja) before the bedrooms take the corners.
+const COUNT_ORDER: Room['kind'][] = ['kitchen', 'pooja', 'bedroom', 'other', 'lobby', 'service', 'balcony', 'dining'];
+
+function orderOf(p: Problem): number {
+  const it = p.item!;
+  if (it.type !== 'count') return BRIEF_ORDER.indexOf(it.type);
+  const k = countKind(it.rooms);
+  // Bedrooms first (biggest), toilets after the attached toilets are in.
+  return k === 'toilet' ? BRIEF_ORDER.indexOf('count-toilet') : COUNT_ORDER.indexOf(k) / 100;
+}
 
 export function briefProblems(model: BuildingModel): Problem[] {
-  return unorderedBriefProblems(model).sort((a, b) => BRIEF_ORDER.indexOf(a.item!.type) - BRIEF_ORDER.indexOf(b.item!.type));
+  return unorderedBriefProblems(model).sort((a, b) => orderOf(a) - orderOf(b));
+}
+
+/** Rooms still missing to reach the brief's counts. */
+export function countShortfall(model: BuildingModel): number {
+  return checkBrief(model)
+    .filter((r) => r.item.type === 'count')
+    .reduce((n, r) => n + r.failing.length, 0);
 }
 
 function unorderedBriefProblems(model: BuildingModel): Problem[] {
@@ -132,16 +149,24 @@ export const briefObjective: Objective = {
     const s = scorePlan(m);
     const unmet = briefProblems(m).length;
     const results = checkBrief(m);
-    return { ...s, points: s.points - 40 * unmet, pass: s.pass && unmet === 0, briefUnmet: unmet, briefMet: results.filter((r) => r.met).length, briefTotal: results.filter((r) => !r.empty).length };
+    // A missing room weighs more than what a new room still needs (outer wall, window, toilet).
+    const short = countShortfall(m);
+    return { ...s, points: s.points - 40 * (unmet - short) - 200 * short, pass: s.pass && unmet === 0, briefUnmet: unmet, briefMet: results.filter((r) => r.met).length, briefTotal: results.filter((r) => !r.empty).length };
   },
   guard(base, next, ops) {
     for (const o of ops) {
       if (!BRIEF_OPS.includes(o.op as OperationName)) return `${o.op} isn't allowed while meeting the brief.`;
       if (o.op === 'remove' && !base.openings.some((x) => x.id === String(o.args.entityId ?? ''))) return 'Only doors and windows may be removed.';
     }
-    // Rooms may be added only as toilets; none removed.
+    // Rooms may be added only as toilets or to make up the brief's counts; none removed.
     for (const r of base.rooms) if (!next.rooms.some((x) => x.id === r.id)) return 'Rooms may not be removed.';
-    for (const r of next.rooms) if (!base.rooms.some((x) => x.id === r.id) && r.kind !== 'toilet' && r.kind !== 'other') return 'Only toilets (and their dress areas) may be added.';
+    const counts = (readBrief(base)?.items ?? []).filter((i) => i.type === 'count') as Extract<BriefItem, { type: 'count' }>[];
+    for (const r of next.rooms) {
+      if (base.rooms.some((x) => x.id === r.id) || r.kind === 'toilet' || r.kind === 'other') continue;
+      const c = counts.find((i) => countKind(i.rooms) === r.kind);
+      if (!c) return `Only toilets, or rooms the brief asks for, may be added (not a ${r.kind}).`;
+      if (next.rooms.filter((x) => x.kind === r.kind).length > Math.max(c.n, base.rooms.filter((x) => x.kind === r.kind).length)) return `The brief asks for ${c.n} ${c.rooms}; no more.`;
+    }
     if ((base.cores ?? []).length !== (next.cores ?? []).length) return 'Stairs and lifts may not be added or removed.';
     if (JSON.stringify(base.site?.plot) !== JSON.stringify(next.site?.plot) || JSON.stringify(base.site?.setbacks) !== JSON.stringify(next.site?.setbacks)) return 'The plot and setbacks may not change.';
     // A room (by name, so swaps count) may grow but not shrink by more than 6".
@@ -336,7 +361,9 @@ export async function runFixLoop(start: BuildingModel, decider: Decider, opts: F
           rec.reason = bad;
         } else {
           const next = obj.score(out.model);
-          if (next.points > score.points) {
+          if (next.errors > score.errors) {
+            rec.reason = 'It would leave a new error in the plan.';
+          } else if (next.points > score.points) {
             model = out.model;
             score = next;
             rec.accepted = true;
@@ -575,6 +602,7 @@ export const briefRuleDecider: Decider = {
     const compass = (v: { x: number; y: number }) => vectorToCompass(v, model.northAngle);
     const p = issues[0];
     if (!p || !p.code.startsWith('brief.') || !p.item) return [];
+    if (p.item.type === 'count') return addRoomCandidates(model, p.item.rooms);
     const r = roomById(model, p.entityIds[0]!);
     if (!r) return [];
     const item = p.item;
@@ -600,8 +628,10 @@ export const briefRuleDecider: Decider = {
       }
       case 'attached_toilet':
         out.push({ ops: [{ op: 'add_toilet', args: { roomId: r.id } }], why: `Add a toilet attached to ${r.name}` });
-        // Or bring a free-standing toilet against it with a door between.
-        for (const t of model.rooms.filter((o) => o.kind === 'toilet' && o.block)) {
+        // Or a new toilet block against one of its sides, with a door from the room.
+        if (r.block) out.push(...newToiletAgainst(model, r));
+        // Or bring a free-standing (common) toilet against it with a door between.
+        for (const t of model.rooms.filter((o) => o.kind === 'toilet' && o.block && !toiletOwner(model, o))) {
           for (const side of OUTER_SIDES) out.push({ ops: [{ op: 'place_room_against', args: { roomId: t.id, targetId: r.id, side, align: 'keep' } }, { op: 'add_door_between', args: { roomA: r.id, roomB: t.id } }], why: `Put ${t.name} against ${r.name} and connect them` });
         }
         break;
@@ -655,6 +685,78 @@ export const briefRuleDecider: Decider = {
     return out;
   },
 };
+
+const CORNER_ORDER = ['south-west', 'north-west', 'south-east', 'north-east'] as const;
+
+/** A toilet that already opens off a bedroom. */
+function toiletOwner(model: BuildingModel, t: Room): Room | undefined {
+  return model.rooms.find((b) => b.kind === 'bedroom' && hasAttachedToilet(model, b) && doorBetween(model, b, t));
+}
+
+function doorBetween(model: BuildingModel, a: Room, b: Room): boolean {
+  return model.openings.some((o) => o.kind === 'door' && (() => {
+    const rs = doorRooms(model, o.id).map((x) => x.id);
+    return rs.includes(a.id) && rs.includes(b.id);
+  })());
+}
+
+/** New toilet blocks placed against each side of a room, each with a door from it. */
+function newToiletAgainst(model: BuildingModel, r: Room): Candidate[] {
+  const out: Candidate[] = [];
+  let name = '';
+  for (let i = 1; ; i++) if (!model.rooms.some((x) => x.name === `Toilet ${i}`)) { name = `Toilet ${i}`; break; }
+  const add: OpCall = { op: 'add_room', args: { kind: 'toilet', name } };
+  let id: string | undefined;
+  try {
+    const m = applyCandidate(model, [add]).model;
+    id = m.rooms.find((x) => !model.rooms.some((y) => y.id === x.id))?.id;
+  } catch {
+    return out;
+  }
+  if (!id) return out;
+  for (const side of OUTER_SIDES) {
+    for (const align of ['keep', ...ACROSS[side]] as const) {
+      out.push({
+        ops: [add, { op: 'place_room_against', args: { roomId: id, targetId: r.id, side, align } }, { op: 'add_door_between', args: { roomA: r.id, roomB: id } }],
+        why: `Add ${name} against ${r.name}'s ${side} side, with a door from ${r.name}`,
+      });
+    }
+  }
+  return out;
+}
+
+/** Where to add one more room of a kind: the brief's zone for it first, then corners, then any free spot. */
+function addRoomCandidates(model: BuildingModel, rooms: string): Candidate[] {
+  const kind = countKind(rooms);
+  const out: Candidate[] = [];
+  if (kind === 'toilet') {
+    // Attach to a bedroom that has none yet; otherwise a common toilet.
+    for (const b of model.rooms.filter((x) => x.kind === 'bedroom' && !hasAttached(model, x))) out.push({ ops: [{ op: 'add_toilet', args: { roomId: b.id } }], why: `Add a toilet attached to ${b.name}` });
+    out.push({ ops: [{ op: 'add_room', args: { kind: 'toilet' } }], why: 'Add a common toilet' });
+  }
+  const zones = (readBrief(model)?.items ?? []).filter((i) => i.type === 'zone' && countKind(i.rooms) === kind).map((i) => (i as { zone: string }).zone);
+  const corners: string[] = [];
+  for (const z of zones) if ((CORNER_ORDER as readonly string[]).includes(z)) corners.push(z);
+  // Kitchens lean south-east, pooja north-east, bedrooms anywhere.
+  if (kind === 'kitchen') corners.push('south-east', 'north-west');
+  if (kind === 'pooja') corners.push('north-east');
+  corners.push(...CORNER_ORDER);
+  const label = kind === 'other' ? 'store' : kind;
+  for (const c of [...new Set(corners)]) out.push({ ops: [{ op: 'add_room', args: { kind, corner: c, ...(kind === 'other' ? { name: uniqueStore(model) } : {}) } }], why: `Add a ${label} in the ${c} corner` });
+  out.push({ ops: [{ op: 'add_room', args: { kind, ...(kind === 'other' ? { name: uniqueStore(model) } : {}) } }], why: `Add a ${label} where there is room` });
+  return out;
+}
+
+function uniqueStore(model: BuildingModel): string {
+  for (let i = 1; ; i++) {
+    const n = i === 1 ? 'Store' : `Store ${i}`;
+    if (!model.rooms.some((r) => r.name === n)) return n;
+  }
+}
+
+function hasAttached(model: BuildingModel, r: Room): boolean {
+  return hasAttachedToilet(model, r);
+}
 
 /** Rules for both check problems and brief items. */
 export const allRulesDecider: Decider = chainDeciders(ruleDecider, briefRuleDecider);

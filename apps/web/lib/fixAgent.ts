@@ -48,6 +48,7 @@ const BRIEF_SYSTEM = `You change a residential floor plan so it meets the client
 Each turn you get the plan (rooms with positions and gaps, doors, fixtures, stairs and lifts), the brief checklist with what is met, and the open problems in order: errors first, then brief items, then warnings. Work on the FIRST open problem: call one to three tools for it, then stop.
 
 How to meet common brief items:
+- A room count (e.g. "3 bedrooms: 1 of 3 so far"): add_room with that kind, in a corner (corner) or at a point (x, y in plan mm) that leaves the open living space usable. Bedrooms want an outer wall each; kitchen and pooja go where the brief's zone says. Toilets: add_toilet on a bedroom that has none (attached), else add_room kind toilet.
 - Room on an outer wall / needs a window: place_room_against with targetId "outer" (side = the outer wall; align to a corner if useful), or swap_rooms with a room already on an outer wall; then add_opening a window on the OUTER wall (wallId of the outer wall, roomId the room).
 - Room in a compass zone (e.g. kitchen in the south-east): place_room_against "outer" on one of the zone's sides, aligned to the other (side south, align east), or swap_rooms with the room already there.
 - Attached toilet: add_toilet on the bedroom (it carves one out, or puts a new toilet beside it with a door).
@@ -55,7 +56,7 @@ How to meet common brief items:
 - Next to another room: place_room_against that room.
 
 Rules (steps that break them are turned down automatically):
-- Don't remove rooms, stairs or lifts; only toilets may be added (via add_toilet). Don't change the plot or setbacks.
+- Don't remove rooms, stairs or lifts. Add only toilets and the rooms the brief's counts ask for. Don't change the plot or setbacks.
 - Rooms may grow, but not shrink by more than 6".
 - A step that makes the plan worse overall is undone; if it puts a room on top of another, the other room is moved out of the way automatically when possible. The history shows what was tried; don't repeat a failed idea.
 - If you can't see a way to meet the first problem, call give_up.`;
@@ -223,8 +224,8 @@ async function execute(runId: string, start: BuildingModel, mode: string, kind: 
     const result = await runFixLoop(start, decider, {
       objective: kind === 'brief' ? briefObjective : fixObjective,
       repairSteps: kind === 'brief' ? 4 : 0,
-      maxTries: kind === 'brief' ? 300 : 80,
-      maxSteps: kind === 'brief' ? 30 : 15,
+      maxTries: kind === 'brief' ? 600 : 80,
+      maxSteps: kind === 'brief' ? 60 : 15,
       shouldStop: async () => {
         const { rows } = await db.query<{ stop_requested: boolean }>(`SELECT stop_requested FROM agent_runs WHERE id = $1`, [runId]);
         return !!rows[0]?.stop_requested;
@@ -289,7 +290,7 @@ export async function keepRun(userId: string, designId: string, runId: string): 
     return {
       request:
         r.kind === 'brief'
-          ? `Meet the brief${b && a && a.briefTotal ? ` (${b.briefMet ?? 0}/${b.briefTotal} → ${a.briefMet ?? 0}/${a.briefTotal} met)` : ''}`
+          ? `${hasCounts(r.model) ? 'Lay out the rooms' : 'Meet the brief'}${b && a && a.briefTotal ? ` (${b.briefMet ?? 0}/${b.briefTotal} → ${a.briefMet ?? 0}/${a.briefTotal} met)` : ''}`
           : `Fix the issues${b && a ? ` (errors ${b.errors}→${a.errors}, warnings ${b.warnings}→${a.warnings})` : ''}`,
       summary,
       ops,
@@ -299,4 +300,8 @@ export async function keepRun(userId: string, designId: string, runId: string): 
   const db = await getDb();
   await db.query(`UPDATE agent_runs SET status = 'kept', updated_at = now() WHERE id = $1`, [runId]);
   return { run: await getRun(userId, designId, runId), revision };
+}
+
+function hasCounts(model: BuildingModel): boolean {
+  return (model.brief?.items ?? []).some((i) => (i as { type: string }).type === 'count');
 }

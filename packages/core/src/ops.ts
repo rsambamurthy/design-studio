@@ -74,12 +74,13 @@ export const OperationSchemas = {
       items: z
         .array(
           z.object({
-            type: z.enum(['outer_wall', 'window', 'attached_toilet', 'zone', 'min_size', 'next_to']),
+            type: z.enum(['count', 'outer_wall', 'window', 'attached_toilet', 'zone', 'min_size', 'next_to']),
             rooms: z.string().describe('"bedrooms", "toilets", "wet rooms", "habitable", a room kind like "kitchen" or "pooja", or a room name'),
             zone: z.enum(['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'centre']).optional(),
             width: z.string().optional(),
             depth: z.string().optional(),
             other: z.string().optional().describe('For next_to: the other room(s)'),
+            n: z.number().int().min(1).max(12).optional().describe('For count: how many rooms of this kind the plan needs'),
           }),
         )
         .max(30),
