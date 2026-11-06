@@ -6,6 +6,9 @@ import {
   buildingOuterRect,
   diffModels,
   checkBrief,
+  DEFAULT_STRUCTURE,
+  generateStructure,
+  type Structure,
   costPlan,
   fitBudget,
   formatInr,
@@ -27,6 +30,7 @@ import AppShell, { type NavKey } from './AppShell';
 import PlanView from './PlanView';
 import SitePanel, { type ApplyResult, type OpInput } from './SitePanel';
 import SitePlanView from './SitePlanView';
+import StructureView from './StructureView';
 import { api, when } from './DesignsHome';
 
 export interface RevisionMeta {
@@ -116,7 +120,8 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const [shares, setShares] = useState<Share[] | null>(null);
   const [labelEdit, setLabelEdit] = useState<{ n: number; text: string } | null>(null);
   const [notice, setNotice] = useState('');
-  const [planMode, setPlanMode] = useState<'plan' | 'site'>('plan');
+  const [planMode, setPlanMode] = useState<'plan' | 'site' | 'structure'>('plan');
+  const [structSet, setStructSet] = useState({ floors: 2, sbc: 150 });
   const [editStatus, setEditStatus] = useState<{ text: string; error: boolean } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -131,6 +136,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const selectedDoorObj = model.openings.find((o) => o.id === selectedDoor);
   const current = design.revisions.find((r) => r.number === design.currentRev);
   const issues = useMemo(() => runChecks(model), [model]);
+  const structure = useMemo(() => (planMode === 'structure' ? generateStructure(model, { ...DEFAULT_STRUCTURE, ...structSet }) : null), [model, planMode, structSet]) as Structure;
   const counts = {
     error: issues.filter((i) => i.severity === 'error').length,
     warning: issues.filter((i) => i.severity === 'warning').length,
@@ -683,6 +689,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
             <div className="tabs">
               <button type="button" className={`tab ${planMode === 'plan' ? 'on' : ''}`} onClick={() => setPlanMode('plan')}>Plan</button>
               <button type="button" className={`tab ${planMode === 'site' ? 'on' : ''}`} onClick={() => setPlanMode('site')}>Site</button>
+              <button type="button" className={`tab ${planMode === 'structure' ? 'on' : ''}`} onClick={() => setPlanMode('structure')}>Structure</button>
               <span className="tab off" title="Coming soon">Elevation</span>
               <span className="tab off" title="Coming soon">3D</span>
             </div>
@@ -701,7 +708,13 @@ export default function Studio({ email, initial }: { email: string; initial: Des
             </div>
           </div>
           {viewing && <p className="viewing-banner">Viewing Rev {revisionLetter(viewing.number)} (read-only)</p>}
-          {planMode === 'site' ? (
+          {planMode === 'structure' ? (
+            <>
+              <p className="struct-banner">Preliminary structural layout from this plan, for a structural engineer to check, design and sign. Not for construction.</p>
+              <StructureView model={model} structure={structure} />
+              <StructurePanel structure={structure} settings={structSet} onSettings={setStructSet} />
+            </>
+          ) : planMode === 'site' ? (
             <SitePlanView model={model} issues={issues} hot={changed.has('site')} onEdit={dragEdit} />
           ) : (
             <>
@@ -1501,6 +1514,64 @@ function CostPanel({ model, editable, onOps }: { model: BuildingModel; editable:
         </div>
       </div>
       <p className="cost-note">Indicative Chennai rates (2026) for an RCC framed house, measured from this plan with a 10' floor height. Choose a grade or set your own rate per item; changes are saved as revisions like any other edit. Get a contractor's quote before committing.</p>
+    </div>
+  );
+}
+
+/** Settings, schedules, quantities and notes for the structural layout. */
+function StructurePanel({ structure, settings, onSettings }: { structure: Structure; settings: { floors: number; sbc: number }; onSettings: (s: { floors: number; sbc: number }) => void }) {
+  const groupBy = <T,>(arr: T[], key: (t: T) => string) => {
+    const m = new Map<string, T[]>();
+    for (const t of arr) m.set(key(t), [...(m.get(key(t)) ?? []), t]);
+    return [...m.entries()];
+  };
+  const cols = groupBy(structure.columns, (c) => `${c.b} × ${c.d}`);
+  const foots = groupBy(structure.columns, (c) => `${(c.footing / 1000).toFixed(1)} m × ${(c.footing / 1000).toFixed(1)} m`).sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
+  const beams = groupBy(structure.beams, (b) => `${b.width} × ${b.depth}`).sort((a, b) => parseFloat(a[0].split('×')[1]!) - parseFloat(b[0].split('×')[1]!));
+  const q = structure.quantities;
+  const ids = (xs: { id: string }[]) => (xs.length > 6 ? `${xs.length} no.` : xs.map((x) => x.id).join(', '));
+  return (
+    <div className="struct-panel">
+      <div className="struct-settings">
+        <label>
+          Floors carried
+          <select value={settings.floors} onChange={(e) => onSettings({ ...settings, floors: Number(e.target.value) })} aria-label="Floors carried">
+            {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n === 1 ? 'Ground only' : `G + ${n - 1}`}</option>)}
+          </select>
+        </label>
+        <label>
+          Soil (safe bearing)
+          <select value={settings.sbc} onChange={(e) => onSettings({ ...settings, sbc: Number(e.target.value) })} aria-label="Soil bearing capacity">
+            {[100, 150, 200, 250].map((n) => <option key={n} value={n}>{n} kN/m²</option>)}
+          </select>
+        </label>
+        <span className="struct-count">{structure.columns.length} columns · {structure.beams.length} beams · {structure.slabs.length} slab panels</span>
+      </div>
+      <div className="struct-grid-cards">
+        <div className="struct-card">
+          <h4>Columns</h4>
+          {cols.map(([k, v]) => <div key={k}><b>{k} mm</b> <span>{ids(v)}</span></div>)}
+        </div>
+        <div className="struct-card">
+          <h4>Footings (isolated)</h4>
+          {foots.map(([k, v]) => <div key={k}><b>{k}</b> <span>{ids(v)}</span></div>)}
+        </div>
+        <div className="struct-card">
+          <h4>Beams</h4>
+          {beams.map(([k, v]) => <div key={k}><b>{k} mm</b> <span>{v.length} no., up to {(Math.max(...v.map((b) => b.span)) / 1000).toFixed(1)} m</span></div>)}
+        </div>
+        <div className="struct-card">
+          <h4>Concrete and steel</h4>
+          {q.parts.map((p) => <div key={p.label}><b>{p.label}</b> <span>{p.concreteM3} m³ · {(p.steelKg / 1000).toFixed(1)} t</span></div>)}
+          <div className="struct-total"><b>Total</b> <span>{q.concreteM3} m³ · {(q.steelKg / 1000).toFixed(1)} t steel</span></div>
+        </div>
+      </div>
+      {structure.notes.length > 0 && (
+        <ul className="struct-notes">
+          {structure.notes.map((n, i) => <li key={i} className={n.severity}>{n.message}</li>)}
+        </ul>
+      )}
+      <p className="cost-note">Rule-of-thumb sizes: columns 230 mm wide, beams about span/12 deep, 125–150 mm slabs, isolated footings from each column&apos;s share of the floor at about 12 kN/m² per floor. Steel by typical kg per m³. Columns go at wall junctions and break spans over 4.5 m.</p>
     </div>
   );
 }

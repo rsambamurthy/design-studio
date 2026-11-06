@@ -18,3 +18,4 @@ export * from './fixtures';
 export * from './fixer';
 export * from './brief';
 export * from './boq';
+export * from './structure';

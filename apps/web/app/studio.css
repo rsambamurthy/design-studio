@@ -438,3 +438,20 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .cost-row-sub select { max-width: 52%; height: 28px; font-size: 12px; border-radius: 6px; padding: 0 4px; }
 .cost-grand { display: flex; justify-content: space-between; font-weight: 800; font-size: 15px; padding: 8px; border-top: 2px solid var(--theme-primary); margin-top: 4px; }
 .rate-form { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--color-muted); }
+
+/* ---------- Structure ---------- */
+.struct-banner { margin: 0 0 8px; padding: 8px 12px; border-radius: 8px; background: #fff7ed; color: #9a3412; font-size: 12.5px; border: 1px dashed #fdba74; }
+.struct-panel { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.struct-settings { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.struct-settings label { display: flex; align-items: center; gap: 6px; }
+.struct-settings select { height: 30px; border-radius: 8px; font-size: 13px; padding: 0 6px; }
+.struct-count { color: var(--color-muted); margin-left: auto; }
+.struct-grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+.struct-card { border: 1px solid var(--color-border, #e5e7eb); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
+.struct-card h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--theme-primary); }
+.struct-card div { display: flex; justify-content: space-between; gap: 8px; }
+.struct-card span { color: var(--color-muted); text-align: right; }
+.struct-total { border-top: 1px solid #eef0f5; padding-top: 4px; margin-top: 2px; }
+.struct-notes { margin: 0; padding-left: 18px; font-size: 12.5px; }
+.struct-notes .warning { color: #b45309; }
+.struct-notes .info { color: var(--color-muted); }
