@@ -130,6 +130,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const [options, setOptions] = useState<{ rev: number; list: LayoutOption[] } | null>(null);
   const [optionsBusy, setOptionsBusy] = useState(false);
   const [preview, setPreview] = useState<number | null>(null);
+  const [compareOpts, setCompareOpts] = useState(false);
   const shownOptions = options && options.rev === design.currentRev ? options.list : null;
   const previewOpt = preview !== null && shownOptions ? shownOptions[preview] : undefined;
   const model = runActive ? run!.model : previewOpt ? previewOpt.model : viewing?.model ?? design.model;
@@ -218,7 +219,10 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     try {
       const list = await layoutOptions(design.model);
       setOptions({ rev: design.currentRev, list });
-      setPreview(0);
+      // Show all of them side by side first.
+      setPreview(null);
+      setCompareOpts(true);
+      setPlanMode('plan');
     } catch (e) {
       setEditStatus({ text: e instanceof Error ? e.message : 'Could not work out options.', error: true });
     } finally {
@@ -231,6 +235,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     if (!r.error) {
       setOptions(null);
       setPreview(null);
+      setCompareOpts(false);
     }
   }
 
@@ -736,7 +741,38 @@ export default function Studio({ email, initial }: { email: string; initial: Des
             </div>
           </div>
           {viewing && <p className="viewing-banner">Viewing Rev {revisionLetter(viewing.number)} (read-only)</p>}
-          {planMode === 'structure' ? (
+          {shownOptions && compareOpts && !previewOpt ? (
+            <div className="options-compare" aria-label="Layout options side by side">
+              <div className="options-compare-head">
+                <b>{shownOptions.length} layout options</b> for your brief, best first. Tap one to see it full size, or use it straight away.
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setCompareOpts(false)}>Back to my plan</button>
+              </div>
+              <div className="options-compare-grid">
+                {shownOptions.map((o, i) => {
+                  const res = checkBrief(o.model);
+                  const metN = res.filter((r) => r.met).length;
+                  const tot = res.filter((r) => !r.empty).length;
+                  const sq = Math.round(o.openArea / 92903.04);
+                  return (
+                    <div key={o.strategy.id} className="compare-card">
+                      <button type="button" className="compare-plan" onClick={() => { setPreview(i); setCompareOpts(false); }} aria-label={`See option ${i + 1} full size`}>
+                        <MiniPlan model={o.model} big />
+                      </button>
+                      <b>{i + 1}. {o.strategy.name}</b>
+                      <span className="option-desc">{o.strategy.description}</span>
+                      <span className="option-stats">
+                        Brief {metN}/{tot} · {o.score.errors} error{o.score.errors === 1 ? '' : 's'} · {o.score.warnings} warning{o.score.warnings === 1 ? '' : 's'} · {sq.toLocaleString('en-IN')} sq ft living
+                      </span>
+                      <span className="compare-btns">
+                        <button type="button" className="btn-secondary btn-sm" onClick={() => { setPreview(i); setCompareOpts(false); }}>See full size</button>
+                        <button type="button" className="btn-primary btn-sm" disabled={busy} onClick={() => void useOption(o)}>Use this option</button>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : planMode === 'structure' ? (
             <>
               <p className="struct-banner">Preliminary structural layout from this plan, for a structural engineer to check, design and sign. Not for construction.</p>
               <StructureView model={model} structure={structure} onEdit={dragEdit} selectedId={selectedCol} onSelect={setSelectedCol} />
@@ -755,7 +791,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
             <SitePlanView model={model} issues={issues} hot={changed.has('site')} onEdit={dragEdit} />
           ) : (
             <>
-              {!viewing && !runActive && !previewOpt && (
+              {!viewing && !runActive && !previewOpt && !(shownOptions && compareOpts) && (
                 <div className="palette" role="toolbar" aria-label="Room blocks">
                   <span className="palette-title">Drag into the plan</span>
                   {PALETTE.map((b) => (
@@ -784,7 +820,8 @@ export default function Studio({ email, initial }: { email: string; initial: Des
                     Option {preview! + 1} of {shownOptions!.length}: <b>{previewOpt.strategy.name}</b>, not saved yet.
                   </span>
                   <span className="option-banner-btns">
-                    <button type="button" className="btn-secondary btn-sm" onClick={() => setPreview(null)}>Back to my plan</button>
+                    <button type="button" className="btn-secondary btn-sm" onClick={() => { setPreview(null); setCompareOpts(true); }}>Compare all {shownOptions!.length}</button>
+                    <button type="button" className="btn-secondary btn-sm" onClick={() => { setPreview(null); setCompareOpts(false); }}>Back to my plan</button>
                     <button type="button" className="btn-primary btn-sm" disabled={busy} onClick={() => void useOption(previewOpt)}>Use this option</button>
                   </span>
                 </div>
@@ -1372,7 +1409,7 @@ function BriefPanel({
 const MINI_FILL: Partial<Record<string, string>> = { bedroom: '#fbe9e3', toilet: '#e3ecfb', kitchen: '#fdf3d8', pooja: '#fff1c7', lobby: '#ececf4', other: '#eef3e6' };
 
 /** A small, schematic plan: outer walls and room blocks. */
-function MiniPlan({ model }: { model: BuildingModel }) {
+function MiniPlan({ model, big = false }: { model: BuildingModel; big?: boolean }) {
   const ext = model.walls.filter((w) => w.kind === 'external');
   const xs = ext.flatMap((w) => [w.a.x, w.b.x]);
   const ys = ext.flatMap((w) => [w.a.y, w.b.y]);
@@ -1382,7 +1419,7 @@ function MiniPlan({ model }: { model: BuildingModel }) {
   const h = Math.max(...ys) - y0;
   const pad = 400;
   return (
-    <svg className="mini-plan" viewBox={`${x0 - pad} ${y0 - pad} ${w + 2 * pad} ${h + 2 * pad}`} aria-hidden="true">
+    <svg className={big ? 'mini-plan big' : 'mini-plan'} viewBox={`${x0 - pad} ${y0 - pad} ${w + 2 * pad} ${h + 2 * pad}`} aria-hidden="true">
       <rect x={x0} y={y0} width={w} height={h} fill="#fff" stroke="#1f2340" strokeWidth={230} />
       {model.rooms
         .filter((r) => r.block)
@@ -1391,12 +1428,12 @@ function MiniPlan({ model }: { model: BuildingModel }) {
           return <rect key={r.id} x={b.x0} y={b.y0} width={b.x1 - b.x0} height={b.y1 - b.y0} fill={MINI_FILL[r.kind] ?? '#f1f1f4'} stroke="#1f2340" strokeWidth={90} />;
         })}
       {model.rooms
-        .filter((r) => r.block && r.kind !== 'toilet' && r.kind !== 'pooja')
+        .filter((r) => r.block && (big || (r.kind !== 'toilet' && r.kind !== 'pooja')))
         .map((r) => {
           const b = r.block!;
           return (
-            <text key={r.id} x={(b.x0 + b.x1) / 2} y={(b.y0 + b.y1) / 2} fontSize={700} textAnchor="middle" dominantBaseline="middle" fill="#1f2340">
-              {r.name.replace('Bed ', 'B').replace('Kitchen', 'K')}
+            <text key={r.id} x={(b.x0 + b.x1) / 2} y={(b.y0 + b.y1) / 2} fontSize={big ? (r.kind === 'toilet' || r.kind === 'pooja' ? 420 : 560) : 700} textAnchor="middle" dominantBaseline="middle" fill="#1f2340">
+              {big ? r.name.replace('Toilet ', 'T').replace('Pooja', 'P') : r.name.replace('Bed ', 'B').replace('Kitchen', 'K')}
             </text>
           );
         })}

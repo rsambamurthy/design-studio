@@ -467,3 +467,13 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .agent-chip:hover { filter: brightness(1.1); }
 .agent-chip.off { background: #fff; color: var(--color-muted); border-color: var(--color-border, #d4d7e3); cursor: help; }
 .agents-why { margin: -4px 0 10px; font-size: 12.5px; color: #9a3412; background: #fff7ed; border-radius: 8px; padding: 6px 10px; }
+
+/* ---------- Options side by side ---------- */
+.options-compare { display: flex; flex-direction: column; gap: 12px; }
+.options-compare-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13.5px; }
+.options-compare-head button { margin-left: auto; }
+.options-compare-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.compare-card { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--color-border, #d4d7e3); border-radius: 12px; background: #fff; font-size: 13px; }
+.compare-plan { padding: 0; border: 1px solid #eef0f5; border-radius: 8px; background: #fafbfd; cursor: zoom-in; }
+.mini-plan.big { width: 100%; }
+.compare-btns { display: flex; gap: 6px; margin-top: auto; flex-wrap: wrap; }
