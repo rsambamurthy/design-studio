@@ -86,6 +86,15 @@ export const OperationSchemas = {
         .max(30),
     })
     .describe('Replace the design brief: the checkable requirements the plan should meet (shown as a checklist; the Meet the brief agent works towards it).'),
+  apply_layout: z
+    .object({
+      rooms: z
+        .array(z.object({ name: z.string(), kind: z.enum(['bedroom', 'toilet', 'kitchen', 'service', 'living', 'dining', 'balcony', 'lobby', 'pooja', 'stair', 'lift', 'other']), x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number(), door: z.string().optional() }))
+        .max(40),
+      zones: z.array(z.object({ name: z.string(), x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number() })).max(40),
+      entrance: z.object({ zone: z.string(), side: z.enum(['top', 'bottom', 'left', 'right']), x0: z.number().optional(), y0: z.number().optional(), x1: z.number().optional(), y1: z.number().optional() }).optional(),
+    })
+    .describe('Replace every room block with a complete layout (wall centre-line rectangles, door targets, open zones). Used by layout options; prefer smaller edits in conversation.'),
   set_structure: z
     .object({
       floors: z.number().int().min(1).max(4).optional().describe('Floors the columns carry: 1 = ground only, 2 = G+1…'),

@@ -29,6 +29,7 @@ import {
   parseBlockWallId,
   type BuildingModel,
   type FurnitureItem,
+  blockWallId,
   type Opening,
   type Point,
   type CoreElement,
@@ -49,7 +50,7 @@ import {
 import { parseOperation as parseOp, type Operation } from './ops';
 import { doorSwingRect } from './checks';
 import { clampBlockInside, coincidentSides, resizeBlockSide, rotateBlock, setBlockClearSize, shellAxisRect, snapBlock, splitBlock, translateBlock } from './blocks';
-import { fitOutRoom } from './fixtures';
+import { fitOutAll, fitOutRoom } from './fixtures';
 import { RATE_CARD } from './boq';
 import { generateStructure } from './structure';
 import { BriefSchema, briefLabel } from './brief';
@@ -704,6 +705,113 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       say(fx, { x: 1, y: 0 });
       say(fy, { x: 0, y: 1 });
       ctx.summary = words.length ? `Moved ${room.name} ${words.join(' and ')}.` : `${room.name} stays where it is.`;
+      break;
+    }
+
+    case 'apply_layout': {
+      // Clear the old blocks, their openings and furniture, and the cores; keep the shell and the open room.
+      const blocks = new Set(model.rooms.filter((r) => r.block).map((r) => r.id));
+      const host = model.rooms.find((r) => !r.block && (r.kind === 'living' || r.kind === 'dining')) ?? model.rooms.find((r) => !r.block);
+      if (!host) throw new ModelError('The design has no open room to lay out in.');
+      model.rooms = model.rooms.filter((r) => !blocks.has(r.id));
+      model.openings = model.openings.filter((o) => !o.wallId.startsWith('blk:') && model.walls.find((w) => w.id === o.wallId)?.kind !== 'external');
+      model.furniture = model.furniture.filter((f) => model.rooms.some((r) => r.id === f.roomId) && f.roomId !== host.id);
+      model.cores = [];
+      host.name = 'Living / Dining';
+      const made = new Map<string, Room>();
+      for (const lr of args.rooms) {
+        const room: Room = { id: ctx.newId('r'), name: lr.name, kind: lr.kind, wet: lr.kind === 'toilet' || lr.kind === 'kitchen' || lr.kind === 'service', bounds: blockBounds('x'), block: { x0: Math.round(lr.x0), y0: Math.round(lr.y0), x1: Math.round(lr.x1), y1: Math.round(lr.y1), thickness: 115 } };
+        room.bounds = blockBounds(room.id);
+        model.rooms.push(room);
+        made.set(lr.name, room);
+      }
+      model.zones = args.zones.map((z) => ({ ...z }));
+      const rectOf = (name: string) => {
+        const r = args.rooms.find((x) => x.name === name);
+        return r ? [r] : args.zones.filter((z) => z.name === name);
+      };
+      // Doors: on the side shared with the target, near the end closest to the target's middle.
+      for (const lr of args.rooms) {
+        if (!lr.door) continue;
+        const room = made.get(lr.name)!;
+        const width = lr.kind === 'toilet' ? 750 : lr.kind === 'pooja' || lr.kind === 'other' ? 760 : lr.kind === 'service' ? 760 : 900;
+        let placed = false;
+        for (const t of rectOf(lr.door)) {
+          const sides: { side: PlanSide4; s0: number; s1: number }[] = [];
+          const ox = [Math.max(lr.x0, t.x0), Math.min(lr.x1, t.x1)] as const;
+          const oy = [Math.max(lr.y0, t.y0), Math.min(lr.y1, t.y1)] as const;
+          if (Math.abs(lr.y0 - t.y1) < 3) sides.push({ side: 'top', s0: ox[0], s1: ox[1] });
+          if (Math.abs(lr.y1 - t.y0) < 3) sides.push({ side: 'bottom', s0: ox[0], s1: ox[1] });
+          if (Math.abs(lr.x0 - t.x1) < 3) sides.push({ side: 'left', s0: oy[0], s1: oy[1] });
+          if (Math.abs(lr.x1 - t.x0) < 3) sides.push({ side: 'right', s0: oy[0], s1: oy[1] });
+          const sd = sides.filter((x) => x.s1 - x.s0 >= width + 250).sort((a, b) => b.s1 - b.s0 - (a.s1 - a.s0))[0];
+          if (!sd) continue;
+          const horizontal = sd.side === 'top' || sd.side === 'bottom';
+          const tc = horizontal ? (t.x0 + t.x1) / 2 : (t.y0 + t.y1) / 2;
+          const nearStart = Math.abs(sd.s0 - tc) <= Math.abs(sd.s1 - tc);
+          const margin = 60 + 115 / 2 + width / 2;
+          const along = nearStart ? sd.s0 + margin : sd.s1 - margin;
+          const origin = horizontal ? lr.x0 : lr.y0;
+          const o: Opening = { id: ctx.newId('door'), label: `${lr.name} door`, wallId: blockWallId(room.id, sd.side), kind: 'door', offset: Math.round(along - origin), width, height: 2100, swingSide: 'left', hinge: nearStart ? 'start' : 'end' };
+          model.openings.push(o);
+          setSwingInto(model, o, room);
+          placed = true;
+          break;
+        }
+        if (!placed) ctx.note(`${lr.name} has no wall long enough onto ${lr.door} for a door.`);
+      }
+      // Windows on outer walls: bedrooms, kitchens, toilets (ventilators) and the open zones.
+      const ext = model.walls.filter((w) => w.kind === 'external');
+      const addWindow = (wallId: string, centre: number, span: number, width: number, label: string) => {
+        const w = Math.min(width, span - 600);
+        if (w < 450) return;
+        model.openings.push({ id: ctx.newId('win'), label, wallId, kind: 'window', offset: Math.round(centre), width: Math.round(w), height: label.includes('ventilator') ? 600 : 1500, swingSide: 'left', hinge: 'start' });
+      };
+      const windowsFor = (r: Rect, label: string, width: number) => {
+        for (const w of ext) {
+          const h = Math.abs(w.a.y - w.b.y) < 1;
+          const onIt = h ? (Math.abs(w.a.y - r.y0) < 3 || Math.abs(w.a.y - r.y1) < 3) : Math.abs(w.a.x - r.x0) < 3 || Math.abs(w.a.x - r.x1) < 3;
+          if (!onIt) continue;
+          const [lo, hi] = h ? [Math.max(r.x0, Math.min(w.a.x, w.b.x)), Math.min(r.x1, Math.max(w.a.x, w.b.x))] : [Math.max(r.y0, Math.min(w.a.y, w.b.y)), Math.min(r.y1, Math.max(w.a.y, w.b.y))];
+          if (hi - lo < 900) continue;
+          const a = h ? w.a.x : w.a.y;
+          const dir = Math.sign((h ? w.b.x : w.b.y) - a) || 1;
+          addWindow(w.id, ((lo + hi) / 2 - a) * dir, hi - lo, width, label);
+        }
+      };
+      for (const lr of args.rooms) {
+        const width = lr.kind === 'bedroom' ? 1500 : lr.kind === 'kitchen' ? 1200 : lr.kind === 'toilet' ? 600 : lr.kind === 'service' ? 1200 : 0;
+        if (width) windowsFor(lr, `${lr.name} ${lr.kind === 'toilet' ? 'ventilator' : 'window'}`, width);
+      }
+      for (const z of args.zones) if (/living|dining|hall/i.test(z.name) && Math.min(z.x1 - z.x0, z.y1 - z.y0) > 2400) windowsFor(z, `${z.name} window`, 1800);
+      // Main door from outside into the entrance zone.
+      if (args.entrance) {
+        const en = args.entrance;
+        const z = en.x0 !== undefined ? { x0: en.x0, y0: en.y0!, x1: en.x1!, y1: en.y1! } : args.zones.find((q) => q.name === en.zone);
+        const side = args.entrance.side;
+        const wall = ext.find((w) => {
+          const h = Math.abs(w.a.y - w.b.y) < 1;
+          if (!z) return false;
+          if (side === 'bottom' || side === 'top') return h && Math.abs(w.a.y - (side === 'bottom' ? z.y1 : z.y0)) < 3;
+          return !h && Math.abs(w.a.x - (side === 'right' ? z.x1 : z.x0)) < 3;
+        });
+        if (z && wall) {
+          const h = side === 'bottom' || side === 'top';
+          const centre = h ? (z.x0 + z.x1) / 2 : (z.y0 + z.y1) / 2;
+          const a = h ? wall.a.x : wall.a.y;
+          const dir = Math.sign((h ? wall.b.x : wall.b.y) - a) || 1;
+          // Clear any window there first.
+          model.openings = model.openings.filter((o) => !(o.wallId === wall.id && Math.abs(o.offset - (centre - a) * dir) < 1500));
+          const o: Opening = { id: ctx.newId('door'), label: 'Main door', wallId: wall.id, kind: 'door', offset: Math.round((centre - a) * dir), width: 1050, height: 2100, swingSide: 'left', hinge: 'start' };
+          model.openings.push(o);
+          setSwingInto(model, o, host);
+        }
+      }
+      Object.assign(model, fitOutAll(model));
+      ctx.touch(...model.rooms.map((r) => r.id));
+      const beds = args.rooms.filter((r) => r.kind === 'bedroom').length;
+      const toilets = args.rooms.filter((r) => r.kind === 'toilet').length;
+      ctx.summary = `Laid out ${beds} bedroom${beds === 1 ? '' : 's'}, ${toilets} toilet${toilets === 1 ? '' : 's'}, ${args.rooms.filter((r) => !['bedroom', 'toilet'].includes(r.kind)).map((r) => r.name.toLowerCase()).join(', ')} with ${[...new Set(args.zones.map((z) => z.name.toLowerCase()))].join(', ')} as open space.`;
       break;
     }
 

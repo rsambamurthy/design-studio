@@ -7,6 +7,7 @@
  */
 import { runChecks, type Issue } from './checks';
 import { checkBrief, countKind, readBrief, roomZone, selectRooms, type BriefItem } from './brief';
+import { planScheme, schemeInput, SCHEMES, type Scheme } from './schemes';
 import { parseLength } from './units';
 import { fixedWallUnder } from './model';
 import { roomClearRect } from './geometry';
@@ -799,7 +800,7 @@ function hasAttached(model: BuildingModel, r: Room): boolean {
 export const allRulesDecider: Decider = chainDeciders(ruleDecider, briefRuleDecider);
 
 export interface LayoutOption {
-  strategy: LayoutStrategy;
+  strategy: { id: string; name: string; description: string };
   model: BuildingModel;
   /** The operations that build it from the starting plan (replayable). */
   ops: OpCall[];
@@ -809,14 +810,36 @@ export interface LayoutOption {
   openArea: number;
 }
 
-/** Lay the plan out once per strategy; best first. */
-export async function layoutOptions(start: BuildingModel, strategies: LayoutStrategy[] = LAYOUT_STRATEGIES): Promise<LayoutOption[]> {
+/**
+ * Give me options: lay the whole plan out once per architectural scheme
+ * (central foyer, bedroom wing, split bedrooms), trying each scheme's mirror
+ * images and keeping the one that best meets the brief; best scheme first.
+ */
+export async function layoutOptions(start: BuildingModel, schemes: Scheme[] = SCHEMES): Promise<LayoutOption[]> {
+  const input = schemeInput(start);
   const out: LayoutOption[] = [];
-  for (const strategy of strategies) {
-    const r = await runFixLoop(start, chainDeciders(ruleDecider, makeBriefRuleDecider(strategy)), { objective: briefObjective, repairSteps: 4, maxSteps: 60, maxTries: 600 });
-    const open = r.model.rooms.filter((x) => !x.block && (x.kind === 'living' || x.kind === 'dining'));
-    const left = open.reduce((a, x) => a + openArea(r.model, x), 0);
-    out.push({ strategy, model: r.model, ops: r.steps.filter((x) => x.accepted).flatMap((x) => x.ops), score: r.after, status: r.status, openArea: left });
+  for (const scheme of schemes) {
+    let best: LayoutOption | undefined;
+    for (const flip of [{}, { x: true }, { y: true }, { x: true, y: true }]) {
+      let plan;
+      try {
+        plan = planScheme(start, scheme, input, flip);
+      } catch {
+        continue;
+      }
+      const ops: OpCall[] = [{ op: 'apply_layout', args: plan as unknown as Record<string, unknown> }];
+      let model: BuildingModel;
+      try {
+        model = applyCandidate(start, ops).model;
+      } catch {
+        continue;
+      }
+      const score = briefObjective.score(model);
+      const open = model.rooms.filter((x) => !x.block && (x.kind === 'living' || x.kind === 'dining'));
+      const opt: LayoutOption = { strategy: { id: scheme.id, name: scheme.name, description: scheme.description }, model, ops, score, status: score.errors ? 'stuck' : 'fixed', openArea: open.reduce((a, x) => a + openArea(model, x), 0) };
+      if (!best || opt.score.points > best.score.points) best = opt;
+    }
+    if (best) out.push(best);
   }
   return out.sort((a, b) => b.score.points - a.score.points);
 }

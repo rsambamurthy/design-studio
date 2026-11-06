@@ -337,9 +337,31 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, on
         return <rect x={c.x0} y={c.y0} width={c.x1 - c.x0} height={c.y1 - c.y0} className="room-selected" transform={shift(`room:${r.id}`)} />;
       })()}
 
+      {/* Open zones (living, foyer, dining, passage) named the way a drawing would; hidden where a room has since moved in. */}
+      {(() => {
+        const blocks = model.rooms.filter((r) => r.block).map((r) => r.block!);
+        const zones = (model.zones ?? []).filter((z, _i, all) => !all.some((o) => o.name === z.name && (o.x1 - o.x0) * (o.y1 - o.y0) > (z.x1 - z.x0) * (z.y1 - z.y0)));
+        return zones
+          .filter((z) => !blocks.some((b) => b.x0 < z.x1 - 300 && b.x1 > z.x0 + 300 && b.y0 < z.y1 - 300 && b.y1 > z.y0 + 300))
+          .map((z) => {
+            const w = z.x1 - z.x0 - 115;
+            const h = z.y1 - z.y0 - 115;
+            const fs = Math.min(font, w / 7, h / 4);
+            if (fs < font * 0.45) return null;
+            const cx = (z.x0 + z.x1) / 2;
+            const cy = (z.y0 + z.y1) / 2;
+            return (
+              <g key={`z-${z.name}-${z.x0}-${z.y0}`} className="zone-label" pointerEvents="none">
+                <text x={cx} y={cy - fs * 0.2} className="room-name zone-name" fontSize={fs}>{z.name}</text>
+                <text x={cx} y={cy + fs * 1.05} className="room-size" fontSize={fs * 0.78}>{formatLength(w, model.displayUnits)} × {formatLength(h, model.displayUnits)}</text>
+              </g>
+            );
+          });
+      })()}
+
       {/* Room labels, scaled to fit small rooms, with a halo for legibility.
           Drag a room by its name onto another room to swap them. */}
-      {model.rooms.map((r) => {
+      {model.rooms.filter((r) => r.block || !(model.zones?.length)).map((r) => {
         const c = roomClearRect(model, r);
         const fs = Math.min(font, (c.x1 - c.x0) / 6.5, (c.y1 - c.y0) / 4);
         let cx = (c.x0 + c.x1) / 2;

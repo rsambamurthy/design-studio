@@ -6,6 +6,7 @@ import {
   buildingOuterRect,
   diffModels,
   checkBrief,
+  openArea,
   generateStructure,
   type Column as StructColumn,
   type Structure,
@@ -152,14 +153,17 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const briefUnmet = briefNow.some((r) => !r.met && !r.empty);
   const agentBusy = runActive ? 'An agent is working; keep or discard its result first.' : previewOpt ? 'Use or leave the option you are previewing first.' : viewing ? 'You are viewing an old revision.' : busy || runBusy || optionsBusy ? 'Working…' : '';
   const agents: { key: string; label: string; why: string; go: () => void }[] = [
-    { key: 'layout', label: 'Lay out the rooms', why: agentBusy || (!hasBrief ? 'Choose the rooms in the Brief tab and save the brief first.' : !roomsMissing ? 'Every room the brief asks for is already in the plan.' : ''), go: () => { setTab('brief'); void startFix('brief'); } },
-    { key: 'options', label: 'Give me options', why: agentBusy || (!hasBrief ? 'Choose the rooms in the Brief tab and save the brief first.' : !roomsMissing ? 'Options are for laying out missing rooms; the brief has them all.' : ''), go: () => { setTab('brief'); void makeOptions(); } },
-    { key: 'brief', label: 'Meet the brief', why: agentBusy || (!hasBrief ? 'Save a brief in the Brief tab first.' : !briefUnmet ? 'The brief is already met.' : ''), go: () => { setTab('brief'); void startFix('brief'); } },
+    { key: 'layout', label: 'Lay out the rooms', why: agentBusy || (!hasBrief ? 'Choose the rooms in the Brief tab and save the brief first.' : ''), go: () => { setTab('brief'); void makeOptions(true); } },
+    { key: 'options', label: 'Give me options', why: agentBusy || (!hasBrief ? 'Choose the rooms in the Brief tab and save the brief first.' : ''), go: () => { setTab('brief'); void makeOptions(); } },
+    { key: 'brief', label: 'Meet the brief', why: agentBusy || (!hasBrief ? 'Save a brief in the Brief tab first.' : roomsMissing ? 'Lay out the rooms first; this adjusts a laid-out plan.' : !briefUnmet ? 'The brief is already met.' : ''), go: () => { setTab('brief'); void startFix('brief'); } },
     { key: 'fix', label: 'Fix the issues', why: agentBusy || (counts.error + counts.warning === 0 ? 'No errors or warnings to fix.' : ''), go: () => void startFix('fix') },
     { key: 'budget', label: 'Fit my budget', why: agentBusy, go: () => { setTab('cost'); setPlanMode('plan'); } },
   ];
   const carpetSqFt = useMemo(() => {
+    const hasBlocks = model.rooms.some((r) => r.block);
     const mm2 = model.rooms.filter((r) => r.kind !== 'lobby').reduce((s, r) => {
+      // The open room is what's left around the room blocks.
+      if (!r.block && hasBlocks) return s + openArea(model, r);
       const c = roomClearRect(model, r);
       return s + (c.x1 - c.x0) * (c.y1 - c.y0);
     }, 0);
@@ -209,7 +213,8 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     }
   }
 
-  async function makeOptions() {
+  /** Work out the layout options; with `best`, go straight to the best one full size. */
+  async function makeOptions(best = false) {
     setOptionsBusy(true);
     setPreview(null);
     setSelected(null);
@@ -219,9 +224,9 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     try {
       const list = await layoutOptions(design.model);
       setOptions({ rev: design.currentRev, list });
-      // Show all of them side by side first.
-      setPreview(null);
-      setCompareOpts(true);
+      // Show all of them side by side first (or the best one, for "Lay out the rooms").
+      setPreview(best && list.length ? 0 : null);
+      setCompareOpts(!best);
       setPlanMode('plan');
     } catch (e) {
       setEditStatus({ text: e instanceof Error ? e.message : 'Could not work out options.', error: true });
@@ -606,6 +611,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
               onSave={(items) => void applyOps(items.length ? 'Updated the brief' : 'Cleared the brief', [{ op: 'set_brief', args: { items } }], false)}
               onMeet={() => void startFix('brief')}
               onOptions={() => void makeOptions()}
+              onLayout={() => void makeOptions(true)}
               optionsBusy={optionsBusy}
               options={shownOptions}
               preview={preview}
@@ -1237,6 +1243,7 @@ function BriefPanel({
   onSave,
   onMeet,
   onOptions,
+  onLayout,
   optionsBusy,
   options,
   preview,
@@ -1249,6 +1256,7 @@ function BriefPanel({
   onSave: (items: BriefItemInput[]) => void;
   onMeet: () => void;
   onOptions: () => void;
+  onLayout: () => void;
   optionsBusy: boolean;
   options: LayoutOption[] | null;
   preview: number | null;
@@ -1355,12 +1363,15 @@ function BriefPanel({
         <button type="button" className="btn-secondary btn-sm" disabled={busy || running || !dirty} onClick={() => onSave(items)}>
           Save brief
         </button>
-        <button type="button" className="btn-primary btn-sm" disabled={busy || running || dirty || saved.length === 0 || (applicable > 0 && met === applicable)} onClick={onMeet} title={dirty ? 'Save the brief first' : undefined}>
-          {missing ? '✦ Lay out the rooms' : '✦ Meet the brief'}
+        <button type="button" className="btn-primary btn-sm" disabled={busy || running || dirty || saved.length === 0 || optionsBusy} onClick={onLayout} title={dirty ? 'Save the brief first' : 'Lay out the whole plan from the brief'}>
+          {optionsBusy ? 'Laying out…' : '✦ Lay out the rooms'}
         </button>
-        {missing && (
-          <button type="button" className="btn-secondary btn-sm" disabled={busy || running || dirty || optionsBusy} onClick={onOptions} title="Three different layouts to compare">
-            {optionsBusy ? 'Working out options…' : '✦ Give me options'}
+        <button type="button" className="btn-secondary btn-sm" disabled={busy || running || dirty || saved.length === 0 || optionsBusy} onClick={onOptions} title="Three different layouts side by side">
+          ✦ Give me options
+        </button>
+        {!missing && applicable > 0 && met < applicable && (
+          <button type="button" className="btn-secondary btn-sm" disabled={busy || running || dirty} onClick={onMeet} title="Adjust the current plan to meet the rest of the brief">
+            ✦ Meet the brief
           </button>
         )}
       </div>
@@ -1427,13 +1438,22 @@ function MiniPlan({ model, big = false }: { model: BuildingModel; big?: boolean 
           const b = r.block!;
           return <rect key={r.id} x={b.x0} y={b.y0} width={b.x1 - b.x0} height={b.y1 - b.y0} fill={MINI_FILL[r.kind] ?? '#f1f1f4'} stroke="#1f2340" strokeWidth={90} />;
         })}
+      {big &&
+        (model.zones ?? [])
+          .filter((z, _i, all) => !all.some((o) => o.name === z.name && (o.x1 - o.x0) * (o.y1 - o.y0) > (z.x1 - z.x0) * (z.y1 - z.y0)))
+          .filter((z) => z.x1 - z.x0 > 1800 && z.y1 - z.y0 > 1200)
+          .map((z) => (
+            <text key={`z${z.name}${z.x0}`} x={(z.x0 + z.x1) / 2} y={(z.y0 + z.y1) / 2} fontSize={500} textAnchor="middle" dominantBaseline="middle" fill="#7a7f99" fontWeight={600}>
+              {z.name}
+            </text>
+          ))}
       {model.rooms
         .filter((r) => r.block && (big || (r.kind !== 'toilet' && r.kind !== 'pooja')))
         .map((r) => {
           const b = r.block!;
           return (
             <text key={r.id} x={(b.x0 + b.x1) / 2} y={(b.y0 + b.y1) / 2} fontSize={big ? (r.kind === 'toilet' || r.kind === 'pooja' ? 420 : 560) : 700} textAnchor="middle" dominantBaseline="middle" fill="#1f2340">
-              {big ? r.name.replace('Toilet ', 'T').replace('Pooja', 'P') : r.name.replace('Bed ', 'B').replace('Kitchen', 'K')}
+              {big ? r.name.replace('Toilet ', 'T').replace('Pooja', 'P').replace('Master Bed', 'Master').replace('Service', 'Svc') : r.name.replace('Bed ', 'B').replace('Kitchen', 'K').replace('Master Bed', 'M')}
             </text>
           );
         })}
