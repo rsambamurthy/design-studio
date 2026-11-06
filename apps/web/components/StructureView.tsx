@@ -1,14 +1,30 @@
 'use client';
 
-import { blockWallRects, formatLength, type BuildingModel, type Structure } from '@ds/core';
-import ZoomSvg from './ZoomSvg';
+import { useState, type PointerEvent } from 'react';
+import { blockWallRects, formatLength, projectToLine, structuralWallLines, type BuildingModel, type Column, type Structure } from '@ds/core';
+import ZoomSvg, { useDrag } from './ZoomSvg';
+
+type EditOp = { op: string; args: Record<string, unknown> };
 
 const PAD = 2600;
 const INK = '#2e2a7a';
 const COL = '#8b2c1a';
 
 /** Preliminary structural layout: grid, columns, footings, beams and slab panels over a faint plan. */
-export default function StructureView({ model, structure }: { model: BuildingModel; structure: Structure }) {
+export default function StructureView({
+  model,
+  structure,
+  onEdit,
+  selectedId,
+  onSelect,
+}: {
+  model: BuildingModel;
+  structure: Structure;
+  /** Enables dragging columns along the walls. */
+  onEdit?: (request: string, ops: EditOp[]) => void;
+  selectedId?: string | null;
+  onSelect?: (id: string | null) => void;
+}) {
   const ext = model.walls.filter((w) => w.kind === 'external');
   const xs = ext.flatMap((w) => [w.a.x, w.b.x]);
   const ys = ext.flatMap((w) => [w.a.y, w.b.y]);
@@ -18,7 +34,7 @@ export default function StructureView({ model, structure }: { model: BuildingMod
   const gLeft = bounds.x0 - 1700;
   const bubble = 330;
   return (
-    <ZoomSvg bounds={bounds} pad={PAD} label={`Structural layout of ${model.name}`}>
+    <ZoomSvg bounds={bounds} pad={PAD} label={`Structural layout of ${model.name}`} editable={!!onEdit} onTap={onSelect ? () => onSelect(null) : undefined}>
       <g className="struct-plan" aria-hidden="true">
         {model.walls.map((w) => (
           <line key={w.id} x1={w.a.x} y1={w.a.y} x2={w.b.x} y2={w.b.y} stroke="#d5d8e3" strokeWidth={w.thickness} strokeLinecap="square" />
@@ -93,15 +109,7 @@ export default function StructureView({ model, structure }: { model: BuildingMod
           </g>
         );
       })}
-      {/* Columns */}
-      {structure.columns.map((c) => (
-        <g key={c.id}>
-          <rect x={c.x - c.b / 2} y={c.y - c.d / 2} width={c.b} height={c.d} fill={COL} />
-          <text x={c.x + c.b / 2 + 50} y={c.y - c.d / 2 - 40} fontSize={200} fill={COL} fontWeight={700}>
-            {c.id}
-          </text>
-        </g>
-      ))}
+      <Columns model={model} columns={structure.columns} onEdit={onEdit} selectedId={selectedId} onSelect={onSelect} />
       {structure.notes
         .filter((n) => n.at && n.severity === 'warning')
         .map((n, i) => (
@@ -112,5 +120,44 @@ export default function StructureView({ model, structure }: { model: BuildingMod
           </g>
         ))}
     </ZoomSvg>
+  );
+}
+
+/** Columns: tap to select, drag to slide along a wall (it snaps to the nearest structural wall line). */
+function Columns({ model, columns, onEdit, selectedId, onSelect }: { model: BuildingModel; columns: Column[]; onEdit?: (request: string, ops: EditOp[]) => void; selectedId?: string | null; onSelect?: (id: string | null) => void }) {
+  const begin = useDrag();
+  const [drag, setDrag] = useState<{ id: string; to: { x: number; y: number } } | null>(null);
+  const lines = structuralWallLines(model);
+  const start = (e: PointerEvent<SVGElement>, c: Column) => {
+    onSelect?.(c.id);
+    if (!begin || !onEdit) return;
+    begin(e, {
+      move: (d) => setDrag({ id: c.id, to: projectToLine(lines as never, { x: c.x + d.x, y: c.y + d.y }) ?? { x: c.x, y: c.y } }),
+      end: (d) => {
+        setDrag(null);
+        if (Math.hypot(d.x, d.y) < 50) return;
+        const to = projectToLine(lines as never, { x: c.x + d.x, y: c.y + d.y });
+        if (!to || (Math.abs(to.x - c.x) < 25 && Math.abs(to.y - c.y) < 25)) return;
+        onEdit(`Moved column ${c.id}`, [{ op: 'set_structure', args: { moveColumn: { from: { x: c.x, y: c.y }, to } } }]);
+      },
+    });
+  };
+  return (
+    <g className="struct-columns">
+      {columns.map((c) => {
+        const at = drag?.id === c.id ? drag.to : c;
+        const sel = selectedId === c.id;
+        return (
+          <g key={c.id} data-column={c.id} className={onEdit ? 'col-drag' : undefined} onPointerDown={(e) => start(e, c)}>
+            <rect x={at.x - 300} y={at.y - 300} width={600} height={600} fill="transparent" />
+            {sel && <rect x={at.x - c.b / 2 - 110} y={at.y - c.d / 2 - 110} width={c.b + 220} height={c.d + 220} fill="none" stroke="#f59e0b" strokeWidth={50} />}
+            <rect x={at.x - c.b / 2} y={at.y - c.d / 2} width={c.b} height={c.d} fill={c.moved === 'Moved by you' ? '#b45309' : COL} />
+            <text x={at.x + c.b / 2 + 50} y={at.y - c.d / 2 - 40} fontSize={200} fill={COL} fontWeight={700}>
+              {c.id}
+            </text>
+          </g>
+        );
+      })}
+    </g>
   );
 }

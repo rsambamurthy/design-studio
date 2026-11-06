@@ -51,6 +51,7 @@ import { doorSwingRect } from './checks';
 import { clampBlockInside, coincidentSides, resizeBlockSide, rotateBlock, setBlockClearSize, shellAxisRect, snapBlock, splitBlock, translateBlock } from './blocks';
 import { fitOutRoom } from './fixtures';
 import { RATE_CARD } from './boq';
+import { generateStructure } from './structure';
 import { BriefSchema, briefLabel } from './brief';
 import { CORNERS, DEFAULT_FLOOR_HEIGHT, LIFT_SHAFTS, coreFootprint, coresOf, enclosureOf, placeInCorner, settleCore, sizeStair, type Corner } from './cores';
 import { formatLength, parseLength } from './units';
@@ -703,6 +704,54 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       say(fx, { x: 1, y: 0 });
       say(fy, { x: 0, y: 1 });
       ctx.summary = words.length ? `Moved ${room.name} ${words.join(' and ')}.` : `${room.name} stays where it is.`;
+      break;
+    }
+
+    case 'set_structure': {
+      const st = { ...(model.structure ?? {}) };
+      const said: string[] = [];
+      if (args.floors !== undefined) {
+        st.floors = args.floors;
+        said.push(`columns carry ${args.floors === 1 ? 'the ground floor only' : `G+${args.floors - 1}`}`);
+      }
+      if (args.sbc !== undefined) {
+        st.sbc = args.sbc;
+        said.push(`soil bearing ${args.sbc} kN/m²`);
+      }
+      if (args.resetColumns) {
+        delete st.moved;
+        delete st.removed;
+        said.push('columns back to the automatic layout');
+      }
+      const near = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.abs(a.x - b.x) < 400 && Math.abs(a.y - b.y) < 400;
+      if (args.moveColumn) {
+        const { from, to } = args.moveColumn;
+        const before = generateStructure(model).columns.find((c) => near(c, from));
+        if (!before) throw new ModelError('There is no column there.');
+        // Re-point an earlier move of the same column instead of stacking moves.
+        const moved = (st.moved ?? []).filter((m) => !near(m.to, from));
+        const origin = (st.moved ?? []).find((m) => near(m.to, from))?.from ?? from;
+        moved.push({ from: { x: Math.round(origin.x), y: Math.round(origin.y) }, to: { x: Math.round(to.x), y: Math.round(to.y) } });
+        st.moved = moved;
+        const after = generateStructure({ ...model, structure: st })
+          .columns.filter((c) => c.moved === 'Moved by you')
+          .sort((a, b) => Math.hypot(a.x - to.x, a.y - to.y) - Math.hypot(b.x - to.x, b.y - to.y))[0];
+        said.push(`moved column ${before.id}${after ? ` to grid ${after.grid}` : ''}`);
+      }
+      if (args.removeColumn) {
+        const p = args.removeColumn;
+        const c = generateStructure(model).columns.find((x) => near(x, p));
+        if (!c) throw new ModelError('There is no column there.');
+        // A column the user moved is removed at where it came from, and the move is forgotten.
+        const mv = (st.moved ?? []).find((m) => near(m.to, c));
+        const at = mv ? mv.from : { x: Math.round(c.x), y: Math.round(c.y) };
+        st.removed = [...(st.removed ?? []), at];
+        st.moved = (st.moved ?? []).filter((m) => m !== mv);
+        said.push(`removed column ${c.id}`);
+      }
+      model.structure = st;
+      ctx.touch('structure');
+      ctx.summary = `Structure: ${said.join('; ') || 'no change'}.`;
       break;
     }
 

@@ -6,8 +6,8 @@ import {
   buildingOuterRect,
   diffModels,
   checkBrief,
-  DEFAULT_STRUCTURE,
   generateStructure,
+  type Column as StructColumn,
   type Structure,
   costPlan,
   fitBudget,
@@ -121,7 +121,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const [labelEdit, setLabelEdit] = useState<{ n: number; text: string } | null>(null);
   const [notice, setNotice] = useState('');
   const [planMode, setPlanMode] = useState<'plan' | 'site' | 'structure'>('plan');
-  const [structSet, setStructSet] = useState({ floors: 2, sbc: 150 });
+  const [selectedCol, setSelectedCol] = useState<string | null>(null);
   const [editStatus, setEditStatus] = useState<{ text: string; error: boolean } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -136,7 +136,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const selectedDoorObj = model.openings.find((o) => o.id === selectedDoor);
   const current = design.revisions.find((r) => r.number === design.currentRev);
   const issues = useMemo(() => runChecks(model), [model]);
-  const structure = useMemo(() => (planMode === 'structure' ? generateStructure(model, { ...DEFAULT_STRUCTURE, ...structSet }) : null), [model, planMode, structSet]) as Structure;
+  const structure = useMemo(() => (planMode === 'structure' ? generateStructure(model) : null), [model, planMode]) as Structure;
   const counts = {
     error: issues.filter((i) => i.severity === 'error').length,
     warning: issues.filter((i) => i.severity === 'warning').length,
@@ -711,8 +711,17 @@ export default function Studio({ email, initial }: { email: string; initial: Des
           {planMode === 'structure' ? (
             <>
               <p className="struct-banner">Preliminary structural layout from this plan, for a structural engineer to check, design and sign. Not for construction.</p>
-              <StructureView model={model} structure={structure} />
-              <StructurePanel structure={structure} settings={structSet} onSettings={setStructSet} />
+              <StructureView model={model} structure={structure} onEdit={dragEdit} selectedId={selectedCol} onSelect={setSelectedCol} />
+              <StructurePanel
+                structure={structure}
+                edited={!!(model.structure?.moved?.length || model.structure?.removed?.length)}
+                selected={structure.columns.find((c) => c.id === selectedCol)}
+                editable={!!dragEdit}
+                onOps={(request, ops) => {
+                  setSelectedCol(null);
+                  void applyOps(request, ops, false);
+                }}
+              />
             </>
           ) : planMode === 'site' ? (
             <SitePlanView model={model} issues={issues} hot={changed.has('site')} onEdit={dragEdit} />
@@ -1519,7 +1528,22 @@ function CostPanel({ model, editable, onOps }: { model: BuildingModel; editable:
 }
 
 /** Settings, schedules, quantities and notes for the structural layout. */
-function StructurePanel({ structure, settings, onSettings }: { structure: Structure; settings: { floors: number; sbc: number }; onSettings: (s: { floors: number; sbc: number }) => void }) {
+function StructurePanel({
+  structure,
+  edited,
+  selected,
+  editable,
+  onOps,
+}: {
+  structure: Structure;
+  edited: boolean;
+  selected?: StructColumn;
+  editable: boolean;
+  onOps: (request: string, ops: { op: string; args: Record<string, unknown> }[]) => void;
+}) {
+  const settings = structure.settings;
+  const onSettings = (s: { floors: number; sbc: number }) =>
+    onOps(`Structure: ${s.floors === 1 ? 'ground only' : `G+${s.floors - 1}`}, soil ${s.sbc} kN/m²`, [{ op: 'set_structure', args: { floors: s.floors, sbc: s.sbc } }]);
   const groupBy = <T,>(arr: T[], key: (t: T) => string) => {
     const m = new Map<string, T[]>();
     for (const t of arr) m.set(key(t), [...(m.get(key(t)) ?? []), t]);
@@ -1535,17 +1559,37 @@ function StructurePanel({ structure, settings, onSettings }: { structure: Struct
       <div className="struct-settings">
         <label>
           Floors carried
-          <select value={settings.floors} onChange={(e) => onSettings({ ...settings, floors: Number(e.target.value) })} aria-label="Floors carried">
+          <select disabled={!editable} value={settings.floors} onChange={(e) => onSettings({ ...settings, floors: Number(e.target.value) })} aria-label="Floors carried">
             {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n === 1 ? 'Ground only' : `G + ${n - 1}`}</option>)}
           </select>
         </label>
         <label>
           Soil (safe bearing)
-          <select value={settings.sbc} onChange={(e) => onSettings({ ...settings, sbc: Number(e.target.value) })} aria-label="Soil bearing capacity">
+          <select disabled={!editable} value={settings.sbc} onChange={(e) => onSettings({ ...settings, sbc: Number(e.target.value) })} aria-label="Soil bearing capacity">
             {[100, 150, 200, 250].map((n) => <option key={n} value={n}>{n} kN/m²</option>)}
           </select>
         </label>
         <span className="struct-count">{structure.columns.length} columns · {structure.beams.length} beams · {structure.slabs.length} slab panels</span>
+      </div>
+      <div className="struct-edit">
+        {selected ? (
+          <>
+            <span>
+              <b>{selected.id}</b> at grid {selected.grid} · {selected.b} × {selected.d} mm · carries ≈ {selected.load} kN · footing {(selected.footing / 1000).toFixed(1)} m
+              {selected.moved ? ` · ${selected.moved.toLowerCase()}` : ''}
+            </span>
+            <button type="button" className="btn-secondary btn-sm" disabled={!editable} onClick={() => onOps(`Removed column ${selected.id}`, [{ op: 'set_structure', args: { removeColumn: { x: selected.x, y: selected.y } } }])}>
+              Remove column
+            </button>
+          </>
+        ) : (
+          <span className="struct-hint">Tap a column to see what it carries; drag it along its wall to move it.</span>
+        )}
+        {edited && (
+          <button type="button" className="link-btn" disabled={!editable} onClick={() => onOps('Columns back to the automatic layout', [{ op: 'set_structure', args: { resetColumns: true } }])}>
+            Reset columns
+          </button>
+        )}
       </div>
       <div className="struct-grid-cards">
         <div className="struct-card">

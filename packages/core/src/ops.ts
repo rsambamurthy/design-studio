@@ -86,6 +86,15 @@ export const OperationSchemas = {
         .max(30),
     })
     .describe('Replace the design brief: the checkable requirements the plan should meet (shown as a checklist; the Meet the brief agent works towards it).'),
+  set_structure: z
+    .object({
+      floors: z.number().int().min(1).max(4).optional().describe('Floors the columns carry: 1 = ground only, 2 = G+1…'),
+      sbc: z.number().min(50).max(500).optional().describe('Safe bearing capacity of the soil, kN/m²'),
+      moveColumn: z.object({ from: z.object({ x: z.number(), y: z.number() }), to: z.object({ x: z.number(), y: z.number() }) }).optional().describe('Move the column at "from" (plan mm) to "to"; it stays on a wall line'),
+      removeColumn: z.object({ x: z.number(), y: z.number() }).optional().describe('Remove the column at this point (plan mm)'),
+      resetColumns: z.boolean().optional().describe('Forget all column moves and removals'),
+    })
+    .describe('Change the preliminary structural layout: floors carried, soil bearing, or move/remove a column.'),
   set_costing: z
     .object({
       grades: z.record(z.string(), z.enum(['basic', 'standard', 'premium'])).optional().describe('Grade per rate-card item id (structure, wall-230, wall-115, plaster-in, plaster-out, floor, floor-wet, dado, paint-in, paint-out, door-main, door, door-toilet, window, sanitary, kitchen, electrical, plumbing)'),

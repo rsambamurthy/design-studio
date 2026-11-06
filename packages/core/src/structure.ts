@@ -157,7 +157,12 @@ function openingSpans(model: BuildingModel, line: Line): [number, number][] {
 const round50 = (n: number) => Math.ceil(n / 50) * 50;
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
-export function generateStructure(model: BuildingModel, settings: StructureSettings = DEFAULT_STRUCTURE): Structure {
+/** Settings saved on the design, over the defaults. */
+export function structureSettings(model: BuildingModel): StructureSettings {
+  return { ...DEFAULT_STRUCTURE, ...(model.structure?.floors ? { floors: model.structure.floors } : {}), ...(model.structure?.sbc ? { sbc: model.structure.sbc } : {}) };
+}
+
+export function generateStructure(model: BuildingModel, settings: StructureSettings = structureSettings(model)): Structure {
   const lines = structuralLines(model);
   const notes: StructureNote[] = [];
   const key = (x: number, y: number) => `${Math.round(x / SNAP)}:${Math.round(y / SNAP)}`;
@@ -183,16 +188,23 @@ export function generateStructure(model: BuildingModel, settings: StructureSetti
       .filter((p) => (l.h ? Math.abs(p.y - l.at) < SNAP && p.x >= l.from - SNAP && p.x <= l.to + SNAP : Math.abs(p.x - l.at) < SNAP && p.y >= l.from - SNAP && p.y <= l.to + SNAP))
       .sort((a, b) => (l.h ? a.x - b.x : a.y - b.y));
 
-  // Split long spans.
-  for (const l of lines) {
-    const ps = onLine(l);
-    for (let i = 0; i + 1 < ps.length; i++) {
-      const a = l.h ? ps[i]!.x : ps[i]!.y;
-      const b = l.h ? ps[i + 1]!.x : ps[i + 1]!.y;
-      const n = Math.ceil((b - a) / MAX_SPAN);
-      for (let k = 1; k < n; k++) {
-        const c = a + ((b - a) * k) / n;
-        add(l.h ? c : l.at, l.h ? l.at : c);
+  // Split long spans, lining extra columns up with columns elsewhere where possible
+  // (so beams can later run straight across open floor between them).
+  for (let pass = 0; pass < 2; pass++) {
+    for (const l of lines) {
+      const ps = onLine(l);
+      for (let i = 0; i + 1 < ps.length; i++) {
+        let a = l.h ? ps[i]!.x : ps[i]!.y;
+        const b = l.h ? ps[i + 1]!.x : ps[i + 1]!.y;
+        if (b - a <= MAX_SPAN) continue;
+        const aligned = [...new Set([...pts.values()].map((p) => (l.h ? p.x : p.y)))].filter((v) => v > a + 1200 && v < b - 1200).sort((x, y) => x - y);
+        while (b - a > MAX_SPAN) {
+          const reach = aligned.filter((v) => v > a + 1200 && v <= a + MAX_SPAN && b - v >= 1200);
+          const n = Math.ceil((b - a) / MAX_SPAN);
+          const c = reach.length ? reach[reach.length - 1]! : a + (b - a) / n;
+          add(l.h ? c : l.at, l.h ? l.at : c);
+          a = c;
+        }
       }
     }
   }
@@ -218,6 +230,21 @@ export function generateStructure(model: BuildingModel, settings: StructureSetti
       else p.y = to;
       moved.set(k, 'Moved clear of an opening');
     }
+  }
+
+  // The user's edits: removed and moved columns (matched by position, so they survive small plan changes).
+  const edits = model.structure;
+  for (const r of edits?.removed ?? []) {
+    for (const [k, p] of pts) if (Math.abs(p.x - r.x) < 400 && Math.abs(p.y - r.y) < 400) pts.delete(k);
+  }
+  for (const mv of edits?.moved ?? []) {
+    const hit = [...pts.entries()].find(([, p]) => Math.abs(p.x - mv.from.x) < 400 && Math.abs(p.y - mv.from.y) < 400);
+    if (!hit) continue;
+    const to = projectToLine(lines, mv.to);
+    if (!to) continue;
+    hit[1].x = to.x;
+    hit[1].y = to.y;
+    moved.set(hit[0], 'Moved by you');
   }
 
   // Grid lines from distinct column x and y.
@@ -284,6 +311,9 @@ export function generateStructure(model: BuildingModel, settings: StructureSetti
     }
   }
 
+  // Beams across open space, where the slab would otherwise span too far.
+  addOpenBeams(model, B, columns, beams, notes);
+
   // Slab panels: one per room.
   const slabs: SlabPanel[] = [];
   for (const r of model.rooms) {
@@ -322,4 +352,112 @@ export function generateStructure(model: BuildingModel, settings: StructureSetti
     notes,
     quantities: { concreteM3: r1(parts.reduce((a, p) => a + p.concreteM3, 0)), steelKg: parts.reduce((a, p) => a + p.steelKg, 0), parts },
   };
+}
+
+/** Nearest point on a structural wall line (within 900 mm), or undefined. */
+export function projectToLine(lines: Line[], p: { x: number; y: number }): { x: number; y: number } | undefined {
+  let best: { x: number; y: number } | undefined;
+  let bd = 900;
+  for (const l of lines) {
+    const along = Math.min(l.to, Math.max(l.from, l.h ? p.x : p.y));
+    const q = l.h ? { x: along, y: l.at } : { x: l.at, y: along };
+    const d = Math.hypot(q.x - p.x, q.y - p.y);
+    if (d < bd) {
+      bd = d;
+      best = q;
+    }
+  }
+  return best && { x: Math.round(best.x), y: Math.round(best.y) };
+}
+
+/** Where columns may be dragged to: the structural wall lines. */
+export function structuralWallLines(model: BuildingModel): { h: boolean; at: number; from: number; to: number }[] {
+  return structuralLines(model).map(({ h, at, from, to }) => ({ h, at, from, to }));
+}
+
+const OPEN_SPAN = MAX_SPAN + 300;
+const MAX_OPEN_BEAM = 7500;
+
+/**
+ * Greedily add column-to-column beams across open floor until no point of
+ * the slab spans more than OPEN_SPAN between supports (or nothing helps).
+ */
+function addOpenBeams(model: BuildingModel, B: { x0: number; x1: number; y0: number; y1: number }, columns: Column[], beams: Beam[], notes: StructureNote[]) {
+  if (B.x1 <= B.x0) return;
+  const step = 300;
+  const cells: { x: number; y: number }[] = [];
+  for (let x = B.x0 + step / 2; x < B.x1; x += step) for (let y = B.y0 + step / 2; y < B.y1; y += step) cells.push({ x, y });
+  type Seg = { h: boolean; at: number; from: number; to: number };
+  const seg = (b: { x0: number; y0: number; x1: number; y1: number }): Seg =>
+    Math.abs(b.y1 - b.y0) < 5 ? { h: true, at: b.y0, from: Math.min(b.x0, b.x1), to: Math.max(b.x0, b.x1) } : { h: false, at: b.x0, from: Math.min(b.y0, b.y1), to: Math.max(b.y0, b.y1) };
+  // Outer walls always support the slab.
+  const supports: Seg[] = [
+    { h: true, at: B.y0, from: B.x0, to: B.x1 },
+    { h: true, at: B.y1, from: B.x0, to: B.x1 },
+    { h: false, at: B.x0, from: B.y0, to: B.y1 },
+    { h: false, at: B.x1, from: B.y0, to: B.y1 },
+    ...beams.map(seg),
+  ];
+  const spanAt = (c: { x: number; y: number }, extra?: Seg) => {
+    let l = B.x0, r = B.x1, t = B.y0, b = B.y1;
+    const all = extra ? [...supports, extra] : supports;
+    for (const s of all) {
+      if (!s.h && c.y >= s.from && c.y <= s.to) {
+        if (s.at <= c.x && s.at > l) l = s.at;
+        if (s.at >= c.x && s.at < r) r = s.at;
+      } else if (s.h && c.x >= s.from && c.x <= s.to) {
+        if (s.at <= c.y && s.at > t) t = s.at;
+        if (s.at >= c.y && s.at < b) b = s.at;
+      }
+    }
+    return Math.min(r - l, b - t);
+  };
+  const worst = (extra?: Seg) => {
+    let max = 0;
+    let over = 0;
+    let at = cells[0]!;
+    for (const c of cells) {
+      const s = spanAt(c, extra);
+      if (s > OPEN_SPAN) over++;
+      if (s > max) {
+        max = s;
+        at = c;
+      }
+    }
+    return { max, over, at };
+  };
+  // Candidate beams: consecutive columns in line, not already joined.
+  const cands: { a: Column; b: Column; s: Seg; span: number }[] = [];
+  for (const a of columns) {
+    for (const b of columns) {
+      if (a === b) continue;
+      const vert = Math.abs(a.x - b.x) < 5 && b.y > a.y;
+      const horiz = Math.abs(a.y - b.y) < 5 && b.x > a.x;
+      if (!vert && !horiz) continue;
+      const span = Math.hypot(b.x - a.x, b.y - a.y);
+      if (span < 1500 || span > MAX_OPEN_BEAM) continue;
+      const between = columns.some((c) => c !== a && c !== b && (vert ? Math.abs(c.x - a.x) < 5 && c.y > a.y && c.y < b.y : Math.abs(c.y - a.y) < 5 && c.x > a.x && c.x < b.x));
+      if (between) continue;
+      if (beams.some((x) => (x.a === a.id && x.b === b.id) || (x.a === b.id && x.b === a.id))) continue;
+      cands.push({ a, b, s: seg({ x0: a.x, y0: a.y, x1: b.x, y1: b.y }), span });
+    }
+  }
+  let now = worst();
+  for (let i = 0; i < 8 && now.max > OPEN_SPAN && cands.length; i++) {
+    let best: { k: number; w: ReturnType<typeof worst> } | undefined;
+    cands.forEach((c, k) => {
+      const w = worst(c.s);
+      if (!best || w.max < best.w.max - 1 || (Math.abs(w.max - best.w.max) <= 1 && (w.over < best.w.over || (w.over === best.w.over && c.span < cands[best.k]!.span)))) best = { k, w };
+    });
+    if (!best || (best.w.max >= now.max - 1 && best.w.over >= now.over)) break;
+    const c = cands.splice(best.k, 1)[0]!;
+    supports.push(c.s);
+    const span = Math.round(c.span);
+    const id = `B${beams.length + 1}`;
+    const depth = Math.max(300, round50(span / 12 + 50));
+    beams.push({ id, a: c.a.id, b: c.b.id, x0: c.a.x, y0: c.a.y, x1: c.b.x, y1: c.b.y, span, width: 230, depth });
+    notes.push({ severity: 'info', message: `Beam ${id} (${c.a.id}–${c.b.id}, ${(span / 1000).toFixed(1)} m, 230×${depth}) added across open floor to keep slab spans short.` });
+    now = best.w;
+  }
+  if (now.max > 5500) notes.push({ severity: 'warning', message: `Part of the slab still spans about ${(now.max / 1000).toFixed(1)} m between beams; the engineer may add a column, a beam or a thicker slab here.`, at: now.at });
 }

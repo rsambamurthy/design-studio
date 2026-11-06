@@ -9,7 +9,8 @@ function check(m: BuildingModel) {
   console.log(`${s.columns.length} columns, ${s.beams.length} beams, ${s.slabs.length} slabs, grid ${s.gridX.length}×${s.gridY.length}, ${s.quantities.concreteM3} m³, ${s.quantities.steelKg} kg`, s.notes.map((n) => n.message));
   expect(s.columns.length).toBeGreaterThanOrEqual(4);
   // No beam longer than the max span (plus snapping slack).
-  for (const b of s.beams) expect(b.span).toBeLessThanOrEqual(MAX_SPAN + 300);
+  const openIds = new Set(s.notes.flatMap((n) => n.message.match(/^Beam (B\d+)/)?.slice(1) ?? []));
+  for (const b of s.beams) expect(b.span).toBeLessThanOrEqual(openIds.has(b.id) ? 7500 : MAX_SPAN + 300);
   // No column inside a door or window.
   for (const o of m.openings) {
     const w = getWall(m, o.wallId);
@@ -37,5 +38,36 @@ describe('preliminary structure', () => {
     const [o] = await layoutOptions(m);
     const s = check(o!.model);
     expect(s.columns.some((c) => c.load > 0)).toBe(true);
+  });
+});
+
+describe('structure edits and open spans', () => {
+  const apply = (m: BuildingModel, n: string, a: unknown) => applyOperation(m, op(n, a)).model;
+  it('adds beams across the open living space', () => {
+    const s = generateStructure(tpl('3bhk'));
+    const open = s.notes.filter((n) => /across open floor/.test(n.message));
+    console.log(s.notes.map((n) => n.message));
+    expect(open.length).toBeGreaterThan(0);
+  });
+  it('saves settings, moves and removes columns, and resets', () => {
+    let m = tpl('3bhk');
+    const s0 = generateStructure(m);
+    m = apply(m, 'set_structure', { floors: 3, sbc: 100 });
+    const s1 = generateStructure(m);
+    expect(s1.settings.floors).toBe(3);
+    expect(Math.max(...s1.columns.map((c) => c.footing))).toBeGreaterThan(Math.max(...s0.columns.map((c) => c.footing)));
+    // Move a column on the top outer wall 600 mm along it.
+    const c = [...s1.columns].sort((a, b) => a.y - b.y || a.x - b.x)[1]!;
+    const r = applyOperation(m, op('set_structure', { moveColumn: { from: { x: c.x, y: c.y }, to: { x: c.x + 600, y: c.y + 200 } } }));
+    expect(r.summary).toMatch(/moved column/);
+    m = r.model;
+    const s2 = generateStructure(m);
+    const mv = s2.columns.find((x) => x.moved === 'Moved by you')!;
+    expect(mv.y).toBe(c.y); // stays on the wall line
+    expect(mv.x).toBe(c.x + 600);
+    m = apply(m, 'set_structure', { removeColumn: { x: mv.x, y: mv.y } });
+    expect(generateStructure(m).columns.length).toBe(s1.columns.length - 1);
+    m = apply(m, 'set_structure', { resetColumns: true });
+    expect(generateStructure(m).columns.length).toBe(s1.columns.length);
   });
 });

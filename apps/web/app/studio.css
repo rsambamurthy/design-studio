@@ -455,3 +455,7 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .struct-notes { margin: 0; padding-left: 18px; font-size: 12.5px; }
 .struct-notes .warning { color: #b45309; }
 .struct-notes .info { color: var(--color-muted); }
+.struct-edit { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; padding: 8px 10px; background: #f6f7fb; border-radius: 8px; }
+.struct-edit > span { flex: 1; }
+.struct-hint { color: var(--color-muted); }
+.col-drag { cursor: grab; }
