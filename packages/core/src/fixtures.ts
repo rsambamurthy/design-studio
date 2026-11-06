@@ -64,9 +64,73 @@ function clear(model: BuildingModel, room: Room, items: FurnitureItem[]): boolea
   return items.every((f) => !taken.some((t) => rectsOverlap(itemFootprint(f), t, 5)));
 }
 
+/** One fixture with its back to a wall, centred at `along` (clamped inside the room). */
+function onWall(room: Room, r: Rect, side: PlanSide, id: string, along: number): FurnitureItem {
+  const c = getCatalogueItem(id)!;
+  const horizontal = side === 'top' || side === 'bottom';
+  const [lo, hi] = horizontal ? [r.x0, r.x1] : [r.y0, r.y1];
+  const a = Math.min(hi - c.width / 2 - 50, Math.max(lo + c.width / 2 + 50, along));
+  const d = side === 'top' ? r.y0 + c.depth / 2 : side === 'bottom' ? r.y1 - c.depth / 2 : side === 'left' ? r.x0 + c.depth / 2 : r.x1 - c.depth / 2;
+  return { id: '', catalogueId: c.id, label: c.name, roomId: room.id, at: horizontal ? { x: Math.round(a), y: Math.round(d) } : { x: Math.round(d), y: Math.round(a) }, rotation: ROT[side], mirrored: false };
+}
+
+/**
+ * Toilet with a window or ventilator: the WC right below it, the shower on the
+ * opposite wall, and the wash basin on a side wall midway between the two.
+ */
+function toiletByWindow(model: BuildingModel, room: Room): FurnitureItem[] | undefined {
+  const r = roomClearRect(model, room);
+  for (const side of SIDES) {
+    const win = roomOpeningsOn(model, room, side).find((o) => o.kind === 'window' || o.kind === 'sliding');
+    if (!win) continue;
+    const p = pointOnWall(getWall(model, win.wallId), win.offset);
+    const horizontal = side === 'top' || side === 'bottom';
+    const along = horizontal ? p.x : p.y;
+    const depth = horizontal ? r.y1 - r.y0 : r.x1 - r.x0;
+    const wc = onWall(room, r, side, 'wc-floor', along);
+    const items: FurnitureItem[] = [wc];
+    // Shower on the opposite wall, facing the WC, if the WC's leg room still leaves space for it.
+    // A shower area is open floor, so the door may swing over it.
+    if (depth >= 700 + 450 + 900) {
+      const sh = onWall(room, r, OPP[side], 'shower', along);
+      if (!rectsOverlap(itemFootprint(sh), itemFootprint(wc), 5)) items.push(sh);
+    }
+    // Basin on a side wall, half way between the window wall and the opposite wall.
+    const mid = horizontal ? (r.y0 + r.y1) / 2 : (r.x0 + r.x1) / 2;
+    const perp: PlanSide[] = horizontal ? ['left', 'right'] : ['top', 'bottom'];
+    // A side wall without the door first.
+    const door = doorSide(model, room);
+    const order = [...perp.filter((x) => x !== door), ...perp.filter((x) => x === door)];
+    let basin: FurnitureItem | undefined;
+    for (const ps of order) {
+      const b = onWall(room, r, ps, 'wash-basin', mid);
+      const overlaps = items.some((f) => rectsOverlap(itemFootprint(f), itemFootprint(b), 5));
+      if (!overlaps && clear(model, room, [b])) {
+        basin = b;
+        break;
+      }
+    }
+    if (basin) items.push(basin);
+    // The WC and basin must stay out of the door's swing (the shower area may not).
+    if (!clear(model, room, [wc])) continue;
+    return items.filter((f) => f.catalogueId === 'shower' || clear(model, room, [f]));
+  }
+  return undefined;
+}
+
 /** Add the standard fixtures to a toilet or kitchen that has none. Returns the items added. */
 export function fitOutRoom(model: BuildingModel, room: Room): FurnitureItem[] {
   if (model.furniture.some((f) => f.roomId === room.id && getCatalogueItem(f.catalogueId)?.category === 'sanitary')) return [];
+  if (room.kind === 'toilet') {
+    const items = toiletByWindow(model, room);
+    if (items) {
+      for (const f of items) {
+        f.id = newId(model);
+        model.furniture.push(f);
+      }
+      return items;
+    }
+  }
   const r = roomClearRect(model, room);
   const len = (s: PlanSide) => (s === 'top' || s === 'bottom' ? r.x1 - r.x0 : r.y1 - r.y0);
   const door = doorSide(model, room);

@@ -87,6 +87,8 @@ export function runChecks(model: BuildingModel): Issue[] {
       }
     }
     for (const { o, rect } of swings) {
+      // A shower area is open floor; a door may swing over it.
+      if (f.catalogueId === 'shower') continue;
       if (rectsOverlap(fr, rect, OVERLAP_TOL)) {
         issues.push({ code: 'door.swing-blocked', severity: 'warning', message: `${o.label} swing hits ${f.label}.`, entityIds: [o.id, f.id], at: centre(rect) });
       }

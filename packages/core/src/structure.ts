@@ -135,20 +135,23 @@ function structuralLines(model: BuildingModel): Line[] {
   return out;
 }
 
-/** Door/window spans (along the line) on a line's walls. */
+/** Door/window spans (along the line) of every opening lying on the line, whichever wall it belongs to. */
 function openingSpans(model: BuildingModel, line: Line): [number, number][] {
   const out: [number, number][] = [];
   for (const o of model.openings) {
-    if (!line.wallIds.includes(o.wallId)) continue;
     let w;
     try {
       w = getWall(model, o.wallId);
     } catch {
       continue;
     }
-    const a = line.h ? w.a.x : w.a.y;
-    const bb = line.h ? w.b.x : w.b.y;
+    const h = Math.abs(w.a.y - w.b.y) < 1;
+    if (h !== line.h) continue;
+    if (Math.abs((h ? w.a.y : w.a.x) - line.at) > 150) continue;
+    const a = h ? w.a.x : w.a.y;
+    const bb = h ? w.b.x : w.b.y;
     const c = a + Math.sign(bb - a || 1) * o.offset;
+    if (c < line.from - 300 || c > line.to + 300) continue;
     out.push([c - o.width / 2, c + o.width / 2]);
   }
   return out;

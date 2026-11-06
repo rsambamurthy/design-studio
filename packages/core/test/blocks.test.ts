@@ -157,7 +157,9 @@ describe('bare shell and dropped blocks', () => {
   it('a dropped bathroom comes with a WC and basin', () => {
     const m = apply(shellAt(), 'add_room', { kind: 'toilet', x: 500, y: 9000 }).model;
     const t = room(m, 'Toilet 1');
-    expect(m.furniture.filter((f) => f.roomId === t.id).map((f) => f.catalogueId).sort()).toEqual(['wash-basin', 'wc-floor']);
+    const ids = m.furniture.filter((f) => f.roomId === t.id).map((f) => f.catalogueId);
+    expect(ids).toContain('wc-floor');
+    expect(ids).toContain('wash-basin');
   });
 
   it('stairs dropped on a room too small for them stand in the open space', () => {

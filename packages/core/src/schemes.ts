@@ -202,19 +202,17 @@ export const SCHEMES: Scheme[] = [
   {
     id: 'wing',
     name: 'Bedroom wing',
-    description: 'Bedrooms in a private wing down one side, each with its own toilet off a short lobby; kitchen, dining and living in one run on the other side, entered at the front.',
+    description: 'Bedrooms in a private wing down one side, each with its toilet on the outer wall; kitchen, dining and living in one run on the other side.',
     build: (_w, _d, p) => {
       const n = p.bedrooms;
+      // Each bedroom with its toilet on the outer wall beside a short passage notch, so every toilet gets a ventilator.
       const beds: Part[] = [];
-      const lane: Part[] = [];
       for (let i = 0; i < n; i++) {
         const name = bedName(i);
-        const depth = i === 0 ? 14.5 : 13;
-        beds.push(fixed(depth, room(name, 'bedroom', 'Passage')));
-        lane.push(fixed(depth, Y(fixed(8, room(`Toilet ${i + 1}`, 'toilet', name)), flex(zone('Passage')))));
+        const toilet = room(`Toilet ${i + 1}`, 'toilet', name);
+        beds.push(fixed(i === 0 ? 18 : 17, Y(fixed(5, X(fixed(8, toilet), flex(zone('Passage')))), flex(room(name, 'bedroom', 'Passage')))));
       }
       beds.push(flex(zone('Foyer')));
-      lane.push(flex(zone('Foyer')));
       const extra = Math.max(0, p.toilets - n);
       const small: Part[] = [];
       if (p.pooja) small.push(fixed(5.5, room('Pooja', 'pooja', 'Dining')));
@@ -226,7 +224,7 @@ export const SCHEMES: Scheme[] = [
         flex(X(flex(zone('Dining')), fixed(6, Y(...small))), 0.8, 12),
         flex(zone('Living'), 1.2, 12),
       );
-      return X(fixed(12.5, Y(...beds)), fixed(5, Y(...lane)), flex(pub, 1, 16));
+      return X(fixed(13, Y(...beds)), flex(pub, 1, 16));
     },
   },
   {
