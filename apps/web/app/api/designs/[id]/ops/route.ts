@@ -15,7 +15,7 @@ type Ctx = { params: Promise<{ id: string }> };
 export const POST = withUser<Ctx>(async (user, req, ctx) => {
   const { id } = await ctx.params;
   const body = await readJson(req);
-  const raw = Array.isArray(body.ops) ? body.ops.slice(0, 20) : [];
+  const raw = Array.isArray(body.ops) ? body.ops.slice(0, 200) : [];
   if (raw.length === 0) throw new AuthError('No changes to apply.');
   const request = String(body.request ?? '').trim().slice(0, 300) || 'Edit';
 

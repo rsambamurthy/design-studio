@@ -6,6 +6,8 @@ import {
   buildingOuterRect,
   diffModels,
   checkBrief,
+  layoutOptions,
+  type LayoutOption,
   coincidentSides,
   fixedWallUnder,
   formatLength,
@@ -113,7 +115,13 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const [editStatus, setEditStatus] = useState<{ text: string; error: boolean } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
-  const model = runActive ? run!.model : viewing?.model ?? design.model;
+  // "Give me options": layouts worked out in the browser; one may be previewed on the plan.
+  const [options, setOptions] = useState<{ rev: number; list: LayoutOption[] } | null>(null);
+  const [optionsBusy, setOptionsBusy] = useState(false);
+  const [preview, setPreview] = useState<number | null>(null);
+  const shownOptions = options && options.rev === design.currentRev ? options.list : null;
+  const previewOpt = preview !== null && shownOptions ? shownOptions[preview] : undefined;
+  const model = runActive ? run!.model : previewOpt ? previewOpt.model : viewing?.model ?? design.model;
   const selectedRoom = model.rooms.find((r) => r.id === selected && r.block);
   const selectedDoorObj = model.openings.find((o) => o.id === selectedDoor);
   const current = design.revisions.find((r) => r.number === design.currentRev);
@@ -174,6 +182,32 @@ export default function Studio({ email, initial }: { email: string; initial: Des
     }
   }
 
+  async function makeOptions() {
+    setOptionsBusy(true);
+    setPreview(null);
+    setSelected(null);
+    setSelectedDoor(null);
+    // Let the button show it is working before the (synchronous-heavy) layouts run.
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      const list = await layoutOptions(design.model);
+      setOptions({ rev: design.currentRev, list });
+      setPreview(0);
+    } catch (e) {
+      setEditStatus({ text: e instanceof Error ? e.message : 'Could not work out options.', error: true });
+    } finally {
+      setOptionsBusy(false);
+    }
+  }
+
+  async function useOption(o: LayoutOption) {
+    const r = await applyOps(`Layout option: ${o.strategy.name}`, o.ops, false);
+    if (!r.error) {
+      setOptions(null);
+      setPreview(null);
+    }
+  }
+
   /** A block from the palette dropped or tapped onto the plan. */
   function place(kind: string, p: { x: number; y: number }) {
     setPlacing(null);
@@ -185,7 +219,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   }
 
   /** Drag edits on the plan or site: saved like any other change; disabled while viewing old revisions. */
-  const dragEdit = viewing || busy || runActive ? undefined : (request: string, ops: OpInput[]) => void applyOps(request, ops, false);
+  const dragEdit = viewing || busy || runActive || previewOpt ? undefined : (request: string, ops: OpInput[]) => void applyOps(request, ops, false);
 
   // Pick up a run left open (e.g. after a reload), then follow it while it runs.
   useEffect(() => {
@@ -540,6 +574,11 @@ export default function Studio({ email, initial }: { email: string; initial: Des
               running={runActive}
               onSave={(items) => void applyOps(items.length ? 'Updated the brief' : 'Cleared the brief', [{ op: 'set_brief', args: { items } }], false)}
               onMeet={() => void startFix('brief')}
+              onOptions={() => void makeOptions()}
+              optionsBusy={optionsBusy}
+              options={shownOptions}
+              preview={preview}
+              onPreview={setPreview}
             />
           )}
 
@@ -652,7 +691,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
             <SitePlanView model={model} issues={issues} hot={changed.has('site')} onEdit={dragEdit} />
           ) : (
             <>
-              {!viewing && !runActive && (
+              {!viewing && !runActive && !previewOpt && (
                 <div className="palette" role="toolbar" aria-label="Room blocks">
                   <span className="palette-title">Drag into the plan</span>
                   {PALETTE.map((b) => (
@@ -673,6 +712,17 @@ export default function Studio({ email, initial }: { email: string; initial: Des
                       {b.label}
                     </button>
                   ))}
+                </div>
+              )}
+              {previewOpt && (
+                <div className="draft-banner option-banner">
+                  <span>
+                    Option {preview! + 1} of {shownOptions!.length}: <b>{previewOpt.strategy.name}</b>, not saved yet.
+                  </span>
+                  <span className="option-banner-btns">
+                    <button type="button" className="btn-secondary btn-sm" onClick={() => setPreview(null)}>Back to my plan</button>
+                    <button type="button" className="btn-primary btn-sm" disabled={busy} onClick={() => void useOption(previewOpt)}>Use this option</button>
+                  </span>
                 </div>
               )}
               {runActive && <p className="draft-banner">Agent draft, not saved yet. {run!.status === 'running' ? 'Working…' : 'Keep or discard it below the plan.'}</p>}
@@ -1085,6 +1135,11 @@ function BriefPanel({
   running,
   onSave,
   onMeet,
+  onOptions,
+  optionsBusy,
+  options,
+  preview,
+  onPreview,
 }: {
   model: BuildingModel;
   draft?: BuildingModel;
@@ -1092,6 +1147,11 @@ function BriefPanel({
   running: boolean;
   onSave: (items: BriefItemInput[]) => void;
   onMeet: () => void;
+  onOptions: () => void;
+  optionsBusy: boolean;
+  options: LayoutOption[] | null;
+  preview: number | null;
+  onPreview: (i: number | null) => void;
 }) {
   const saved = (model.brief?.items ?? []) as BriefItemInput[];
   const has = (type: string, rooms: string) => saved.find((i) => i.type === type && i.rooms === rooms);
@@ -1197,7 +1257,34 @@ function BriefPanel({
         <button type="button" className="btn-primary btn-sm" disabled={busy || running || dirty || saved.length === 0 || (applicable > 0 && met === applicable)} onClick={onMeet} title={dirty ? 'Save the brief first' : undefined}>
           {missing ? '✦ Lay out the rooms' : '✦ Meet the brief'}
         </button>
+        {missing && (
+          <button type="button" className="btn-secondary btn-sm" disabled={busy || running || dirty || optionsBusy} onClick={onOptions} title="Three different layouts to compare">
+            {optionsBusy ? 'Working out options…' : '✦ Give me options'}
+          </button>
+        )}
       </div>
+      {options && (
+        <div className="options" role="list" aria-label="Layout options">
+          {options.map((o, i) => {
+            const res = checkBrief(o.model);
+            const metN = res.filter((r) => r.met).length;
+            const tot = res.filter((r) => !r.empty).length;
+            const sq = Math.round(o.openArea / 92903.04);
+            return (
+              <button key={o.strategy.id} type="button" role="listitem" className={`option-card ${preview === i ? 'on' : ''}`} onClick={() => onPreview(preview === i ? null : i)} aria-pressed={preview === i}>
+                <MiniPlan model={o.model} />
+                <span className="option-text">
+                  <b>{i + 1}. {o.strategy.name}</b>
+                  <span className="option-desc">{o.strategy.description}</span>
+                  <span className="option-stats">
+                    Brief {metN}/{tot} · {o.score.errors} error{o.score.errors === 1 ? '' : 's'} · {o.score.warnings} warning{o.score.warnings === 1 ? '' : 's'} · {model.displayUnits === 'ft-in' ? `${sq.toLocaleString('en-IN')} sq ft` : `${(o.openArea / 1e6).toFixed(1)} m²`} living
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
       {status.length > 0 && (
         <div className="brief-status">
           <div className="brief-status-head">
@@ -1215,5 +1302,40 @@ function BriefPanel({
         </div>
       )}
     </div>
+  );
+}
+
+const MINI_FILL: Partial<Record<string, string>> = { bedroom: '#fbe9e3', toilet: '#e3ecfb', kitchen: '#fdf3d8', pooja: '#fff1c7', lobby: '#ececf4', other: '#eef3e6' };
+
+/** A small, schematic plan: outer walls and room blocks. */
+function MiniPlan({ model }: { model: BuildingModel }) {
+  const ext = model.walls.filter((w) => w.kind === 'external');
+  const xs = ext.flatMap((w) => [w.a.x, w.b.x]);
+  const ys = ext.flatMap((w) => [w.a.y, w.b.y]);
+  const x0 = Math.min(...xs);
+  const y0 = Math.min(...ys);
+  const w = Math.max(...xs) - x0;
+  const h = Math.max(...ys) - y0;
+  const pad = 400;
+  return (
+    <svg className="mini-plan" viewBox={`${x0 - pad} ${y0 - pad} ${w + 2 * pad} ${h + 2 * pad}`} aria-hidden="true">
+      <rect x={x0} y={y0} width={w} height={h} fill="#fff" stroke="#1f2340" strokeWidth={230} />
+      {model.rooms
+        .filter((r) => r.block)
+        .map((r) => {
+          const b = r.block!;
+          return <rect key={r.id} x={b.x0} y={b.y0} width={b.x1 - b.x0} height={b.y1 - b.y0} fill={MINI_FILL[r.kind] ?? '#f1f1f4'} stroke="#1f2340" strokeWidth={90} />;
+        })}
+      {model.rooms
+        .filter((r) => r.block && r.kind !== 'toilet' && r.kind !== 'pooja')
+        .map((r) => {
+          const b = r.block!;
+          return (
+            <text key={r.id} x={(b.x0 + b.x1) / 2} y={(b.y0 + b.y1) / 2} fontSize={700} textAnchor="middle" dominantBaseline="middle" fill="#1f2340">
+              {r.name.replace('Bed ', 'B').replace('Kitchen', 'K')}
+            </text>
+          );
+        })}
+    </svg>
   );
 }

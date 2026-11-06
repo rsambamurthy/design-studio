@@ -390,3 +390,12 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .brief-count button { display: grid; place-items: center; padding: 0; flex: none; width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--color-border, #d4d7e3); background: #fff; cursor: pointer; font-size: 15px; line-height: 1; }
 .brief-count button:disabled { opacity: .4; cursor: default; }
 .brief-count b { min-width: 16px; text-align: center; }
+.options { display: flex; flex-direction: column; gap: 8px; }
+.option-card { display: flex; gap: 10px; align-items: center; text-align: left; padding: 8px; border-radius: 10px; border: 1px solid var(--color-border, #d4d7e3); background: #fff; cursor: pointer; font: inherit; }
+.option-card.on { border-color: var(--theme-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme-primary) 25%, transparent); }
+.mini-plan { width: 116px; flex: none; height: auto; }
+.option-text { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.option-desc { color: var(--color-muted); font-size: 12px; }
+.option-stats { font-size: 12px; color: var(--theme-primary); font-weight: 600; }
+.option-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.option-banner-btns { display: flex; gap: 6px; }

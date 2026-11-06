@@ -2233,21 +2233,28 @@ export function describeNorth(model: BuildingModel): string {
   return `north is ${model.northAngle}° clockwise from plan-up`;
 }
 
+/** Floor area (mm²) of an open room left around the room blocks. */
+export function openArea(model: BuildingModel, room: Room): number {
+  const c = roomClearRect(model, room);
+  const { w, h } = rectSize(c);
+  let area = w * h;
+  for (const r of model.rooms) {
+    const b = r.block;
+    if (!b) continue;
+    const t = b.thickness / 2;
+    const ix = Math.max(0, Math.min(c.x1, b.x1 + t) - Math.max(c.x0, b.x0 - t));
+    const iy = Math.max(0, Math.min(c.y1, b.y1 + t) - Math.max(c.y0, b.y0 - t));
+    area -= ix * iy;
+  }
+  return area;
+}
+
 /** Room size as displayed: clear dimensions, plan width × plan depth. */
 export function roomSizeText(model: BuildingModel, room: Room): string {
   const c = roomClearRect(model, room);
   const { w, h } = rectSize(c);
   if (!room.block && model.rooms.some((r) => r.block)) {
-    // Open space: what's left around the room blocks.
-    let area = w * h;
-    for (const r of model.rooms) {
-      const b = r.block;
-      if (!b) continue;
-      const t = b.thickness / 2;
-      const ix = Math.max(0, Math.min(c.x1, b.x1 + t) - Math.max(c.x0, b.x0 - t));
-      const iy = Math.max(0, Math.min(c.y1, b.y1 + t) - Math.max(c.y0, b.y0 - t));
-      area -= ix * iy;
-    }
+    const area = openArea(model, room);
     const sq = area / 92903.04;
     return model.displayUnits === 'ft-in' ? `≈ ${Math.round(sq).toLocaleString('en-IN')} sq ft open` : `≈ ${(area / 1e6).toFixed(1)} m² open`;
   }

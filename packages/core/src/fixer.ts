@@ -10,7 +10,7 @@ import { checkBrief, countKind, readBrief, roomZone, selectRooms, type BriefItem
 import { parseLength } from './units';
 import { fixedWallUnder } from './model';
 import { roomClearRect } from './geometry';
-import { applyOperation, hasAttachedToilet } from './kernel';
+import { applyOperation, hasAttachedToilet, openArea } from './kernel';
 import { getWall, parseBlockWallId, type BuildingModel, type Room } from './model';
 import { parseOperation, type OperationName } from './ops';
 import { pointOnWall, wallDir } from './geometry';
@@ -597,12 +597,40 @@ function onOuter(model: BuildingModel, r: Room): boolean {
   return (['top', 'bottom', 'left', 'right'] as const).some((s) => fixedWallUnder(model, r, s)?.kind === 'external');
 }
 
-export const briefRuleDecider: Decider = {
-  decide({ model, issues }) {
+/** How a layout places its bedrooms: anchor points as fractions of the building (0,0 = plan top-left). */
+export interface LayoutStrategy {
+  id: string;
+  name: string;
+  description: string;
+  bedrooms: [number, number][];
+}
+
+export const LAYOUT_STRATEGIES: LayoutStrategy[] = [
+  { id: 'wing', name: 'Bedroom wing', description: 'Bedrooms together along one side; one big living space.', bedrooms: [[0, 1], [0, 0], [0, 0.5], [0.3, 1], [0.3, 0]] },
+  { id: 'corners', name: 'Bedrooms in the corners', description: 'Bedrooms spread to the corners for privacy; living in the middle.', bedrooms: [[0, 1], [1, 0], [0, 0], [1, 1], [0.5, 0]] },
+  { id: 'front-back', name: 'Front and back', description: 'Bedrooms along the front and back walls; living runs through the middle.', bedrooms: [[0, 0], [0, 1], [0.33, 0], [0.33, 1], [0.66, 0]] },
+];
+
+function buildingRect(model: BuildingModel) {
+  const ext = model.walls.filter((w) => w.kind === 'external');
+  const xs = ext.flatMap((w) => [w.a.x, w.b.x]);
+  const ys = ext.flatMap((w) => [w.a.y, w.b.y]);
+  return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+}
+
+export const briefRuleDecider: Decider = makeBriefRuleDecider();
+
+/** Rule-based brief decider; a strategy decides where new bedrooms go first. */
+export function makeBriefRuleDecider(strategy?: LayoutStrategy): Decider {
+  return { decide: (input) => briefRules(input, strategy) };
+}
+
+function briefRules({ model, issues }: DeciderInput, strategy?: LayoutStrategy): Candidate[] {
+  {
     const compass = (v: { x: number; y: number }) => vectorToCompass(v, model.northAngle);
     const p = issues[0];
     if (!p || !p.code.startsWith('brief.') || !p.item) return [];
-    if (p.item.type === 'count') return addRoomCandidates(model, p.item.rooms);
+    if (p.item.type === 'count') return addRoomCandidates(model, p.item.rooms, strategy);
     const r = roomById(model, p.entityIds[0]!);
     if (!r) return [];
     const item = p.item;
@@ -683,8 +711,8 @@ export const briefRuleDecider: Decider = {
       }
     }
     return out;
-  },
-};
+  }
+}
 
 const CORNER_ORDER = ['south-west', 'north-west', 'south-east', 'north-east'] as const;
 
@@ -726,9 +754,18 @@ function newToiletAgainst(model: BuildingModel, r: Room): Candidate[] {
 }
 
 /** Where to add one more room of a kind: the brief's zone for it first, then corners, then any free spot. */
-function addRoomCandidates(model: BuildingModel, rooms: string): Candidate[] {
+function addRoomCandidates(model: BuildingModel, rooms: string, strategy?: LayoutStrategy): Candidate[] {
   const kind = countKind(rooms);
   const out: Candidate[] = [];
+  if (kind === 'bedroom' && strategy) {
+    // The strategy's next anchor first, then its others.
+    const b = buildingRect(model);
+    const k = model.rooms.filter((r) => r.kind === 'bedroom').length;
+    const anchors = [...strategy.bedrooms.slice(k), ...strategy.bedrooms.slice(0, k)];
+    for (const [fx, fy] of anchors) {
+      out.push({ ops: [{ op: 'add_room', args: { kind, x: Math.round(b.x0 + fx * (b.x1 - b.x0)), y: Math.round(b.y0 + fy * (b.y1 - b.y0)) } }], why: `Add a bedroom (${strategy.name.toLowerCase()})` });
+    }
+  }
   if (kind === 'toilet') {
     // Attach to a bedroom that has none yet; otherwise a common toilet.
     for (const b of model.rooms.filter((x) => x.kind === 'bedroom' && !hasAttached(model, x))) out.push({ ops: [{ op: 'add_toilet', args: { roomId: b.id } }], why: `Add a toilet attached to ${b.name}` });
@@ -760,3 +797,26 @@ function hasAttached(model: BuildingModel, r: Room): boolean {
 
 /** Rules for both check problems and brief items. */
 export const allRulesDecider: Decider = chainDeciders(ruleDecider, briefRuleDecider);
+
+export interface LayoutOption {
+  strategy: LayoutStrategy;
+  model: BuildingModel;
+  /** The operations that build it from the starting plan (replayable). */
+  ops: OpCall[];
+  score: PlanScore;
+  status: FixStatus;
+  /** Open (living/dining) area left, mm². */
+  openArea: number;
+}
+
+/** Lay the plan out once per strategy; best first. */
+export async function layoutOptions(start: BuildingModel, strategies: LayoutStrategy[] = LAYOUT_STRATEGIES): Promise<LayoutOption[]> {
+  const out: LayoutOption[] = [];
+  for (const strategy of strategies) {
+    const r = await runFixLoop(start, chainDeciders(ruleDecider, makeBriefRuleDecider(strategy)), { objective: briefObjective, repairSteps: 4, maxSteps: 60, maxTries: 600 });
+    const open = r.model.rooms.filter((x) => !x.block && (x.kind === 'living' || x.kind === 'dining'));
+    const left = open.reduce((a, x) => a + openArea(r.model, x), 0);
+    out.push({ strategy, model: r.model, ops: r.steps.filter((x) => x.accepted).flatMap((x) => x.ops), score: r.after, status: r.status, openArea: left });
+  }
+  return out.sort((a, b) => b.score.points - a.score.points);
+}
