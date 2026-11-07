@@ -13,6 +13,7 @@
 import type { Rect } from './geometry';
 import type { BuildingModel, Room } from './model';
 import { parseLength } from './units';
+import { compassToSide } from './site';
 
 const FT = 304.8;
 const WALL = 115;
@@ -152,6 +153,8 @@ export interface SchemeInput {
   bedMin?: number;
   /** Service area entered from the kitchen only, or also by its own outside door. */
   serviceEntry?: 'kitchen' | 'outside';
+  /** Plan side the main entrance must be on (from the owner's chosen direction). */
+  entrySide?: 'top' | 'bottom' | 'left' | 'right';
 }
 
 export interface Scheme {
@@ -309,11 +312,35 @@ export function shellRect(model: BuildingModel): Rect | undefined {
 
 /** Lay a scheme out in the building. */
 export function planScheme(model: BuildingModel, scheme: Scheme, input: SchemeInput, flip: { x?: boolean; y?: boolean } = {}): LayoutPlan {
+  const want = input.entrySide;
+  if (!want) return planOriented(model, scheme, input, flip);
+  // The owner's entrance direction: the scheme's front faces it; if this scheme's living area
+  // isn't on its front, turn it so a living-area wall faces that way instead.
+  const first = planOriented(model, scheme, input, flip);
+  if (first.entrance) return first;
+  const h = want === 'left' || want === 'right';
+  const tries: { turn: boolean; flip: { x?: boolean; y?: boolean } }[] = [];
+  for (const turn of [!h, h]) for (const x of [!!flip.x, !flip.x]) for (const y of [!!flip.y, !flip.y]) tries.push({ turn, flip: { x, y } });
+  for (const t of tries) {
+    try {
+      const p = planOriented(model, scheme, input, t.flip, t.turn);
+      if (p.entrance) return p;
+    } catch {
+      /* try the next way round */
+    }
+  }
+  return first;
+}
+
+function planOriented(model: BuildingModel, scheme: Scheme, input: SchemeInput, flip: { x?: boolean; y?: boolean }, turnAs?: boolean): LayoutPlan {
   const r = shellRect(model);
   if (!r) throw new Error('The design has no outer walls to lay out in.');
   const out: LayoutPlan = { rooms: [], zones: [], ...(input.serviceEntry === 'outside' ? { serviceDoor: true } : {}) };
   // Schemes are drawn for plots deeper than wide; on a wide plot the scheme turns so its front faces a long side.
-  const turn = r.x1 - r.x0 > (r.y1 - r.y0) * 1.1;
+  // When the owner has chosen the entrance direction, the scheme's front (its entrance side) faces that way.
+  const want = input.entrySide;
+  const turn = turnAs ?? (want ? want === 'left' || want === 'right' : r.x1 - r.x0 > (r.y1 - r.y0) * 1.1);
+  if (want && turnAs === undefined) flip = turn ? { ...flip, x: want === 'left' } : { ...flip, y: want === 'top' };
   if (turn) {
     solve(scheme.build(r.y1 - r.y0, r.x1 - r.x0, input), { x0: r.y0, y0: r.x0, x1: r.y1, y1: r.x1 }, out);
     const swap = <T extends { x0: number; y0: number; x1: number; y1: number }>(q: T): T => ({ ...q, x0: q.y0, y0: q.x0, x1: q.y1, y1: q.x1 });
@@ -338,11 +365,11 @@ export function planScheme(model: BuildingModel, scheme: Scheme, input: SchemeIn
       { side: 'left', len: Math.abs(z.x0 - r.x0) < 2 ? z.y1 - z.y0 : 0 },
       { side: 'top', len: Math.abs(z.y0 - r.y0) < 2 ? z.x1 - z.x0 : 0 },
     ];
-    const t = touches.find((x) => x.len > 1500);
+    const t = touches.find((x) => x.len > 1500 && (!want || x.side === want));
     return t ? { zone: z.name, side: t.side, x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1 } : undefined;
   };
   // The main door always opens into the living area (its foyer counts), never into a room.
-  for (const name of ['Living', 'Foyer', 'Entrance']) {
+  for (const name of want ? ['Living', 'Foyer', 'Entrance', 'Dining'] : ['Living', 'Foyer', 'Entrance']) {
     const e = out.zones.filter((z) => z.name === name).map(sideOf).find(Boolean);
     if (e) {
       out.entrance = e;
@@ -371,6 +398,13 @@ export function schemeInput(model: BuildingModel): SchemeInput {
   };
   const bedMin = min ? Math.max(ft(min.width), ft(min.depth)) : 0;
   const se = items.find((i) => i.type === 'service_entry') as { entry?: string } | undefined;
+  const me = items.find((i) => i.type === 'main_entry') as { facing?: 'north' | 'east' | 'south' | 'west' } | undefined;
+  let entrySide: SchemeInput['entrySide'];
+  try {
+    entrySide = me?.facing ? compassToSide(me.facing, model.northAngle) : undefined;
+  } catch {
+    entrySide = undefined;
+  }
   return {
     bedrooms,
     toilets: count('toilet', ['toilet'], bedrooms),
@@ -378,6 +412,7 @@ export function schemeInput(model: BuildingModel): SchemeInput {
     stores: Math.min(2, count('store', [], 0)),
     ...(bedMin ? { bedMin } : {}),
     serviceEntry: se?.entry === 'outside' ? 'outside' : 'kitchen',
+    ...(entrySide ? { entrySide } : {}),
   };
 }
 

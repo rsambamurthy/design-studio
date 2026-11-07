@@ -150,11 +150,12 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const briefNow = checkBrief(design.model);
   const hasBrief = briefNow.length > 0;
   const roomsMissing = briefNow.some((r) => r.item.type === 'count' && !r.met);
+  const noEntry = hasBrief && !briefNow.some((r) => r.item.type === 'main_entry') ? 'Choose which way the main entrance faces in the Brief tab first.' : '';
   const briefUnmet = briefNow.some((r) => !r.met && !r.empty);
   const agentBusy = runActive ? 'An agent is working; keep or discard its result first.' : previewOpt ? 'Use or leave the option you are previewing first.' : viewing ? 'You are viewing an old revision.' : busy || runBusy || optionsBusy ? 'Working…' : '';
   const agents: { key: string; label: string; why: string; go: () => void }[] = [
-    { key: 'layout', label: 'Lay out the rooms', why: agentBusy || (!hasBrief ? 'Choose the rooms in the Brief tab and save the brief first.' : ''), go: () => { setTab('brief'); void makeOptions(true); } },
-    { key: 'options', label: 'Give me options', why: agentBusy || (!hasBrief ? 'Choose the rooms in the Brief tab and save the brief first.' : ''), go: () => { setTab('brief'); void makeOptions(); } },
+    { key: 'layout', label: 'Lay out the rooms', why: agentBusy || (!hasBrief ? 'Choose the rooms in the Brief tab and save the brief first.' : noEntry), go: () => { setTab('brief'); void makeOptions(true); } },
+    { key: 'options', label: 'Give me options', why: agentBusy || (!hasBrief ? 'Choose the rooms in the Brief tab and save the brief first.' : noEntry), go: () => { setTab('brief'); void makeOptions(); } },
     { key: 'brief', label: 'Meet the brief', why: agentBusy || (!hasBrief ? 'Save a brief in the Brief tab first.' : roomsMissing ? 'Lay out the rooms first; this adjusts a laid-out plan.' : !briefUnmet ? 'The brief is already met.' : ''), go: () => { setTab('brief'); void startFix('brief'); } },
     { key: 'fix', label: 'Fix the issues', why: agentBusy || (counts.error + counts.warning === 0 ? 'No errors or warnings to fix.' : ''), go: () => void startFix('fix') },
     { key: 'budget', label: 'Fit my budget', why: agentBusy, go: () => { setTab('cost'); setPlanMode('plan'); } },
@@ -1235,7 +1236,7 @@ function AgentPanel({ run, busy, onAction }: { run: AgentRunView; busy: boolean;
   );
 }
 
-type BriefItemInput = { type: string; rooms: string; zone?: string; width?: string; depth?: string; other?: string; n?: number; entry?: string };
+type BriefItemInput = { type: string; rooms: string; zone?: string; width?: string; depth?: string; other?: string; n?: number; entry?: string; facing?: string };
 
 const ZONE_NAMES = ['north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'centre'];
 
@@ -1282,6 +1283,8 @@ function BriefPanel({
   const [poojas, setPoojas] = useState(countOf('pooja'));
   const [stores, setStores] = useState(countOf('store'));
   const [serviceEntry, setServiceEntry] = useState((saved.find((i) => i.type === 'service_entry')?.entry as string | undefined) ?? '');
+  // Which way the main entrance faces: the owner's choice; never preset.
+  const [facing, setFacing] = useState((saved.find((i) => i.type === 'main_entry')?.facing as string | undefined) ?? '');
   const minItem = has('min_size', 'bedrooms');
   const [minOn, setMinOn] = useState(!!minItem);
   const [minW, setMinW] = useState(minItem?.width ?? "10'");
@@ -1313,7 +1316,9 @@ function BriefPanel({
     ...(pooja ? [{ type: 'zone', rooms: 'pooja', zone: pooja }] : []),
     ...(minOn ? [{ type: 'min_size', rooms: 'bedrooms', width: minW, depth: minD }] : []),
     ...(serviceEntry ? [{ type: 'service_entry', rooms: 'service', entry: serviceEntry }] : []),
+    ...(facing ? [{ type: 'main_entry', rooms: 'house', facing }] : []),
   ];
+  const savedFacing = saved.some((i) => i.type === 'main_entry');
   const canon = (list: BriefItemInput[]) =>
     list
       .map((i) => Object.entries(i).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}=${String(v)}`).sort().join('&'))
@@ -1367,6 +1372,15 @@ function BriefPanel({
           <input value={minD} onChange={(e) => setMinD(e.target.value)} disabled={!minOn} aria-label="Minimum bedroom depth" />
         </label>
       </div>
+      <div className="brief-sub">Main entrance faces</div>
+      <div className="chips" role="radiogroup" aria-label="Main entrance faces">
+        {(['north', 'east', 'south', 'west'] as const).map((v) => (
+          <button type="button" key={v} role="radio" aria-checked={facing === v} className={`chip ${facing === v ? 'on' : ''}`} onClick={() => setFacing(v)}>
+            {v.charAt(0).toUpperCase() + v.slice(1)}
+          </button>
+        ))}
+      </div>
+      {!facing && <p className="brief-need">Choose the direction of the main entrance to the house. The layouts are planned around it.</p>}
       <div className="brief-sub">Service area entrance</div>
       <div className="chips" role="radiogroup" aria-label="Service area entrance">
         {([['', 'Not set'], ['kitchen', 'From the kitchen'], ['outside', 'Separate outside door']] as const).map(([v, label]) => (
@@ -1379,10 +1393,10 @@ function BriefPanel({
         <button type="button" className="btn-secondary btn-sm" disabled={busy || running || !dirty} onClick={() => onSave(items)}>
           Save brief
         </button>
-        <button type="button" className="btn-primary btn-sm" disabled={busy || running || dirty || saved.length === 0 || optionsBusy} onClick={onLayout} title={dirty ? 'Save the brief first' : 'Lay out the whole plan from the brief'}>
+        <button type="button" className="btn-primary btn-sm" disabled={busy || running || dirty || saved.length === 0 || !savedFacing || optionsBusy} onClick={onLayout} title={dirty ? 'Save the brief first' : !savedFacing ? 'Choose which way the main entrance faces first' : 'Lay out the whole plan from the brief'}>
           {optionsBusy ? 'Laying out…' : '✦ Lay out the rooms'}
         </button>
-        <button type="button" className="btn-secondary btn-sm" disabled={busy || running || dirty || saved.length === 0 || optionsBusy} onClick={onOptions} title="Three different layouts side by side">
+        <button type="button" className="btn-secondary btn-sm" disabled={busy || running || dirty || saved.length === 0 || !savedFacing || optionsBusy} onClick={onOptions} title={!savedFacing ? 'Choose which way the main entrance faces first' : 'Three different layouts side by side'}>
           ✦ Give me options
         </button>
         {!missing && applicable > 0 && met < applicable && (

@@ -841,5 +841,7 @@ export async function layoutOptions(start: BuildingModel, schemes: Scheme[] = SC
     }
     if (best) out.push(best);
   }
-  return out.sort((a, b) => b.score.points - a.score.points);
+  // The owner's entrance direction comes first: an option that can't face that way goes last.
+  const entryOk = (o: LayoutOption) => Number(checkBrief(o.model).find((r) => r.item.type === 'main_entry')?.met !== false);
+  return out.sort((a, b) => entryOk(b) - entryOk(a) || b.score.points - a.score.points);
 }

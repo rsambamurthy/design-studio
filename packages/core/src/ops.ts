@@ -74,7 +74,7 @@ export const OperationSchemas = {
       items: z
         .array(
           z.object({
-            type: z.enum(['count', 'outer_wall', 'window', 'attached_toilet', 'zone', 'min_size', 'next_to', 'service_entry']),
+            type: z.enum(['count', 'outer_wall', 'window', 'attached_toilet', 'zone', 'min_size', 'next_to', 'service_entry', 'main_entry']),
             rooms: z.string().describe('"bedrooms", "toilets", "wet rooms", "habitable", a room kind like "kitchen" or "pooja", or a room name'),
             zone: z.enum(['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'centre']).optional(),
             width: z.string().optional(),
@@ -82,6 +82,7 @@ export const OperationSchemas = {
             other: z.string().optional().describe('For next_to: the other room(s)'),
             n: z.number().int().min(1).max(12).optional().describe('For count: how many rooms of this kind the plan needs'),
             entry: z.enum(['kitchen', 'outside']).optional().describe('For service_entry: service area entered from the kitchen only, or also its own outside door'),
+            facing: z.enum(['north', 'east', 'south', 'west']).optional().describe("For main_entry (rooms: \"house\"): the direction the house's main entrance faces. Only the owner sets this; never assume it."),
           }),
         )
         .max(30),

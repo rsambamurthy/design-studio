@@ -4,7 +4,7 @@
  * The brief lives on the model (set_brief), so it is versioned with the plan.
  */
 import { z } from 'zod';
-import { compassVector, roomClearRect } from './geometry';
+import { compassVector, planSideCompass, pointOnWall, roomClearRect } from './geometry';
 import { hasAttachedToilet, roomOpeningsOn } from './kernel';
 import { coincidentSides } from './blocks';
 import { fixedWallUnder, type BuildingModel, type Room } from './model';
@@ -28,6 +28,8 @@ export const BriefItemSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('min_size'), rooms, width: z.string(), depth: z.string() }),
   z.object({ type: z.literal('next_to'), rooms, other: z.string().min(1) }),
   z.object({ type: z.literal('service_entry'), rooms, entry: z.enum(['kitchen', 'outside']) }),
+  // The direction the house's main entrance faces: the owner's choice, never assumed.
+  z.object({ type: z.literal('main_entry'), rooms, facing: z.enum(['north', 'east', 'south', 'west']) }),
 ]);
 export type BriefItem = z.infer<typeof BriefItemSchema>;
 
@@ -116,6 +118,8 @@ export function briefLabel(item: BriefItem): string {
       return `${who} next to ${item.other}`;
     case 'service_entry':
       return item.entry === 'outside' ? 'Service area with its own outside door' : 'Service area entered from the kitchen';
+    case 'main_entry':
+      return `Main entrance facing ${item.facing}`;
   }
 }
 
@@ -146,6 +150,13 @@ export function checkBrief(model: BuildingModel, brief: Brief | undefined = read
       const short = Math.max(0, item.n - targets.length);
       const failing = Array.from({ length: short }, (_, k) => ({ roomId: `count:${item.rooms}:${k}`, name: item.rooms, why: `${targets.length} of ${item.n} so far` }));
       return { item, label: briefLabel(item), met: short === 0, failing, empty: false };
+    }
+    if (item.type === 'main_entry') {
+      const side = mainDoorSide(model);
+      const facing = side ? planSideCompass(side, model.northAngle) : undefined;
+      const ok = facing === item.facing;
+      const why = !side ? `This layout has no living-area wall on the ${item.facing} side for the main door` : `The main door faces ${facing}`;
+      return { item, label: briefLabel(item), met: ok, failing: ok ? [] : [{ roomId: 'main-door', name: 'Main door', why }], empty: false };
     }
     const failing: BriefResult['failing'] = [];
     for (const r of targets) {
@@ -207,4 +218,17 @@ function doorBetweenRooms(model: BuildingModel, a: Room, b: Room): boolean {
     const shared = a.block && b.block ? coincidentSides(model, a, s).some((c) => c.room.id === b.id) : false;
     return shared && roomOpeningsOn(model, a, s).some((o) => o.kind === 'door' || o.kind === 'opening');
   });
+}
+
+/** The plan side (of the outer walls) the main door is on. */
+export function mainDoorSide(model: BuildingModel): 'top' | 'bottom' | 'left' | 'right' | undefined {
+  const door = model.openings.find((o) => /^main door$/i.test(o.label));
+  const wall = door && model.walls.find((w) => w.id === door.wallId);
+  if (!door || !wall || wall.kind !== 'external') return undefined;
+  const ext = model.walls.filter((w) => w.kind === 'external');
+  const xs = ext.flatMap((w) => [w.a.x, w.b.x]);
+  const ys = ext.flatMap((w) => [w.a.y, w.b.y]);
+  const p = pointOnWall(wall, door.offset);
+  const d = { top: p.y - Math.min(...ys), bottom: Math.max(...ys) - p.y, left: p.x - Math.min(...xs), right: Math.max(...xs) - p.x };
+  return (Object.entries(d) as ['top' | 'bottom' | 'left' | 'right', number][]).sort((a, b) => a[1] - b[1])[0]![0];
 }
