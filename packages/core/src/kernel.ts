@@ -1498,6 +1498,14 @@ class Ctx {
         resizeBlockSide(this.model, p.room, p.side, delta);
         this.touch(p.room.id);
       }
+      // A resized toilet or kitchen is fitted out again to suit its new size.
+      for (const r of [room, ...partners.map((p) => p.room)]) {
+        if (r.kind !== 'toilet' && r.kind !== 'kitchen') continue;
+        const had = this.model.furniture.filter((f) => f.roomId === r.id && getCatalogueItem(f.catalogueId)?.category === 'sanitary');
+        if (!had.length) continue;
+        this.model.furniture = this.model.furniture.filter((f) => !had.includes(f));
+        for (const f of fitOutRoom(this.model, r)) this.touch(f.id);
+      }
       return;
     }
     // Room blocks lying on this wall keep to it.

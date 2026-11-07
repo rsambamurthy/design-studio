@@ -33,6 +33,30 @@ import {
   type Point,
 } from '@ds/core';
 import ZoomSvg, { useDrag, type Vec } from './ZoomSvg';
+import { coincidentSides, roomClearRect as clearOf, getRoom as roomById } from '@ds/core';
+
+/** While a room's wall is dragged: the new clear sizes of the rooms on both sides of it, by room id. */
+function liveSizes(model: BuildingModel, p: { id: string; dx: number; dy: number } | null): Map<string, string> {
+  const out = new Map<string, string>();
+  const m = p ? /^blk:(.+):(top|bottom|left|right)$/.exec(p.id) : null;
+  if (!p || !m) return out;
+  try {
+    const room = roomById(model, m[1]!);
+    const side = m[2] as 'top' | 'bottom' | 'left' | 'right';
+    for (const { room: r, side: sd } of [{ room, side }, ...coincidentSides(model, room, side)]) {
+      const c = { ...clearOf(model, r) };
+      const d = sd === 'top' || sd === 'bottom' ? p.dy : p.dx;
+      if (sd === 'top') c.y0 += d;
+      if (sd === 'bottom') c.y1 += d;
+      if (sd === 'left') c.x0 += d;
+      if (sd === 'right') c.x1 += d;
+      out.set(r.id, `${formatFtIn(Math.max(0, c.x1 - c.x0))} × ${formatFtIn(Math.max(0, c.y1 - c.y0))}`);
+    }
+  } catch {
+    /* no live sizes */
+  }
+  return out;
+}
 
 export interface EditOp {
   op: string;
@@ -91,6 +115,7 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, on
   const compass = (v: Vec) => vectorToCompass(v, model.northAngle);
   // While a room block is dragged, everything that belongs to it moves with it.
   const dragging = preview?.id.startsWith('room:') ? preview.id.slice(5) : undefined;
+  const live = useMemo(() => liveSizes(model, preview), [model, preview]);
   const carried = useMemo(() => {
     const ids = new Set<string>();
     if (!dragging) return ids;
@@ -381,7 +406,7 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, on
               </rect>
             )}
             <text x={cx} y={cy - fs * 0.2} className="room-name" fontSize={fs}>{r.name}</text>
-            <text x={cx} y={cy + fs * 1.05} className="room-size" fontSize={fs * 0.78}>{roomSizeText(model, r)}</text>
+            <text x={cx} y={cy + fs * 1.05} className={`room-size ${live.has(r.id) ? 'live' : ''}`} fontSize={fs * 0.78}>{live.get(r.id) ?? roomSizeText(model, r)}</text>
           </g>
         );
       })}
