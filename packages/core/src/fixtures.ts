@@ -104,16 +104,27 @@ function toiletByWindow(model: BuildingModel, room: Room): FurnitureItem[] | und
     } else if (depth >= 700 + 450 + 900) {
       const sh = onWall(room, r, OPP[side], 'shower', along);
       if (!rectsOverlap(itemFootprint(sh), itemFootprint(wc), 5)) items.push(sh);
+    } else {
+      // A shallow toilet with the window on its long wall: the WC is in one corner, the shower at the other end.
+      const [lo, hi] = horizontal ? [r.x0, r.x1] : [r.y0, r.y1];
+      const far = along - lo > hi - along ? lo : hi;
+      const sh = onWall(room, r, side, 'shower', far);
+      if (!rectsOverlap(itemFootprint(sh), itemFootprint(wc), 5)) items.push(sh);
     }
     // Basin on a side wall, half way between the window wall and the opposite wall.
     const mid = horizontal ? (r.y0 + r.y1) / 2 : (r.x0 + r.x1) / 2;
     const perp: PlanSide[] = horizontal ? ['left', 'right'] : ['top', 'bottom'];
     // A side wall without the door first.
     const door = doorSide(model, room);
-    const order = [...perp.filter((x) => x !== door), ...perp.filter((x) => x === door)];
+    // You walk in facing the basin: straight across from the door first, then half way along a side wall.
+    const dOpen = door ? roomOpeningsOn(model, room, door).find((o) => o.kind === 'door') : undefined;
+    const dPt = dOpen ? pointOnWall(getWall(model, dOpen.wallId), dOpen.offset) : undefined;
+    const tries: [PlanSide, number][] = [];
+    if (door && dPt) tries.push([OPP[door], door === 'top' || door === 'bottom' ? dPt.x : dPt.y]);
+    for (const ps of [...perp.filter((x) => x !== door), ...perp.filter((x) => x === door)]) tries.push([ps, mid]);
     let basin: FurnitureItem | undefined;
-    for (const ps of order) {
-      const b = onWall(room, r, ps, 'wash-basin', mid);
+    for (const [ps, at] of tries) {
+      const b = onWall(room, r, ps, 'wash-basin', at);
       const overlaps = items.some((f) => rectsOverlap(itemFootprint(f), itemFootprint(b), 5));
       if (!overlaps && clear(model, room, [b])) {
         basin = b;

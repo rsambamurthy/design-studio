@@ -28,10 +28,18 @@ describe('toilet fit-out', () => {
           const shower = fx.find((f) => f.catalogueId === 'shower');
           // Shower on the opposite wall, unless the door is there (then beside the WC, away from the door).
           const doorOpposite = (['top', 'bottom', 'left', 'right'] as const).some((s) => s === ({ top: 'bottom', bottom: 'top', left: 'right', right: 'left' } as const)[side] && roomOpeningsOn(m, t, s).some((o) => o.kind === 'door'));
-          if (shower && !doorOpposite) expect(h ? Math.abs(shower.at.y - (side === 'top' ? r.y1 : r.y0)) : Math.abs(shower.at.x - (side === 'left' ? r.x1 : r.x0))).toBeLessThan(500);
-          const basin = fx.find((f) => f.catalogueId === 'wash-basin');
-          if (basin) expect(Math.abs((h ? basin.at.y : basin.at.x) - (h ? (r.y0 + r.y1) / 2 : (r.x0 + r.x1) / 2))).toBeLessThan(50);
+          const depth = h ? r.y1 - r.y0 : r.x1 - r.x0;
+          const wallLen = h ? r.x1 - r.x0 : r.y1 - r.y0;
+          if (shower && !doorOpposite && depth >= 2050) expect(h ? Math.abs(shower.at.y - (side === 'top' ? r.y1 : r.y0)) : Math.abs(shower.at.x - (side === 'left' ? r.x1 : r.x0))).toBeLessThan(500);
+          // A ventilator on the long wall sits in a corner, never in the middle, and the WC with it.
+          if (wallLen > depth + 1) {
+            const lo = h ? r.x0 : r.y0;
+            const hi = h ? r.x1 : r.y1;
+            const at = h ? p.x : p.y;
+            expect(Math.min(at - lo, hi - at), `${sc.id} ${t.name} ventilator in a corner`).toBeLessThan(wallLen / 2 - 300);
+          }
           checked++;
+          continue;
         }
       }
     }
@@ -70,5 +78,23 @@ describe('toilet entrance', () => {
       }
     }
     expect(checked).toBeGreaterThan(15);
+  });
+});
+
+describe('toilets at the corners', () => {
+  it('puts a toilet in the plot corner with the ventilator on its short outer wall, not a scrap of floor beside it', () => {
+    const base = startDesign('shell', [op('set_plot', { eastWest: "50'", northSouth: "30'" }), op('set_setback', { side: 'all', distance: "0'" })], 'T').model;
+    const sc = SCHEMES.find((s) => s.id === 'split')!;
+    for (const flip of [false, true]) {
+      const m = applyOperation(base, op('apply_layout', planScheme(base, sc, { bedrooms: 3, toilets: 3, pooja: true, stores: 0 }, { x: flip }))).model;
+      for (const name of ['Toilet 2', 'Toilet 3']) {
+        const t = m.rooms.find((r) => r.name === name)!;
+        const r = roomClearRect(m, t);
+        // Touches the top or bottom wall: nothing between it and the corner.
+        expect(r.y0 < 200 || r.y1 > 8700, name).toBe(true);
+        const short = r.y0 < 200 ? 'top' : 'bottom';
+        expect(roomOpeningsOn(m, t, short).some((o) => o.kind === 'window'), `${name} ventilator on its short wall`).toBe(true);
+      }
+    }
   });
 });

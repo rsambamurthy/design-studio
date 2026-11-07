@@ -268,9 +268,10 @@ export const SCHEMES: Scheme[] = [
           // Narrow plot: the toilet sits at the front wall below its bedroom (ventilator outside), entered from it.
           const bed = `Bed ${i + 1}`;
           const t = room(`Toilet ${i + 1}`, 'toilet', bed);
-          // The rest of the strip beside the toilet is the bedroom's dress / wardrobe, not left-over space.
-          const dress = room(`Dress ${i + 1}`, 'other', bed);
-          fronts.push(flex(Y(flex(room(bed, 'bedroom', 'Living'), 1, bm(p, 10)), fixed(5, i % 2 ? X(flex(dress), fixed(8, t)) : X(fixed(8, t), flex(dress)))), 1, bm(p, 11)));
+          // The toilet goes to the plot's corner (ventilator on its short outer wall, WC under it, shower
+          // opposite, basin in the middle facing the door); the rest of the strip opens off the foyer.
+          const rest = flex(zone('Foyer'));
+          fronts.push(flex(Y(flex(room(bed, 'bedroom', 'Living'), 1, bm(p, 10)), fixed(5, i === 1 ? X(fixed(8, t), rest) : X(rest, fixed(8, t)))), 1, bm(p, 11)));
         } else {
           fronts.push(flex(room(`Bed ${i + 1}`, 'bedroom', 'Living'), 1, bm(p, 10.5), Math.max(15, bm(p, 10.5))));
           fronts.push(fixed(5, Y(fixed(3.5, zone('Living')), flex(room(`Toilet ${i + 1}`, 'toilet', `Bed ${i + 1}`)))));
@@ -327,6 +328,7 @@ export function planScheme(model: BuildingModel, scheme: Scheme, input: SchemeIn
   });
   out.rooms = out.rooms.map(fl);
   out.zones = tidyZones(tidyZones(out.zones.map(fl)));
+  toiletsToCorners(out, r);
   absorbDeadSpace(out);
   // Entrance: an entrance/foyer zone on an outer wall (the front first), else living or dining.
   const sideOf = (z: LayoutZone): LayoutPlan['entrance'] => {
@@ -445,5 +447,35 @@ function absorbDeadSpace(out: LayoutPlan) {
     t.x1 = Math.max(t.x1, victim.x1);
     t.y1 = Math.max(t.y1, victim.y1);
     out.zones = zs.filter((z) => z !== victim);
+  }
+}
+
+/**
+ * A toilet never leaves a scrap of floor between itself and an outer wall:
+ * when a short piece of open space sits between a toilet and the outer wall
+ * (the same width as the toilet), the toilet moves to the wall and the piece
+ * goes to the inner side, where it joins the foyer or passage. The toilet
+ * then has its ventilator on that short outer wall, the WC under it, the
+ * shower opposite and the basin in the middle facing the door.
+ */
+function toiletsToCorners(out: LayoutPlan, r: Rect) {
+  for (const t of out.rooms.filter((x) => x.kind === 'toilet')) {
+    for (const z of out.zones) {
+      const sameX = Math.abs(z.x0 - t.x0) < 3 && Math.abs(z.x1 - t.x1) < 3;
+      const sameY = Math.abs(z.y0 - t.y0) < 3 && Math.abs(z.y1 - t.y1) < 3;
+      const th = t.y1 - t.y0;
+      const tw = t.x1 - t.x0;
+      if (sameX && Math.abs(z.y1 - t.y0) < 3 && Math.abs(z.y0 - r.y0) < 3 && z.y1 - z.y0 < 2500) {
+        // Open piece above the toilet, against the top wall.
+        [t.y0, t.y1, z.y0, z.y1] = [r.y0, r.y0 + th, r.y0 + th, t.y1];
+      } else if (sameX && Math.abs(z.y0 - t.y1) < 3 && Math.abs(z.y1 - r.y1) < 3 && z.y1 - z.y0 < 2500) {
+        [z.y0, z.y1, t.y0, t.y1] = [t.y0, r.y1 - th, r.y1 - th, r.y1];
+      } else if (sameY && Math.abs(z.x1 - t.x0) < 3 && Math.abs(z.x0 - r.x0) < 3 && z.x1 - z.x0 < 2500) {
+        [t.x0, t.x1, z.x0, z.x1] = [r.x0, r.x0 + tw, r.x0 + tw, t.x1];
+      } else if (sameY && Math.abs(z.x0 - t.x1) < 3 && Math.abs(z.x1 - r.x1) < 3 && z.x1 - z.x0 < 2500) {
+        [z.x0, z.x1, t.x0, t.x1] = [t.x0, r.x1 - tw, r.x1 - tw, r.x1];
+      } else continue;
+      break;
+    }
   }
 }

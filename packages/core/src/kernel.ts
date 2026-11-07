@@ -781,6 +781,38 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
         if (w < 450) return;
         model.openings.push({ id: ctx.newId('win'), label, wallId, kind: 'window', offset: Math.round(centre), width: Math.round(w), height: label.includes('ventilator') ? 600 : 1500, swingSide: 'left', hinge: 'start' });
       };
+      /**
+       * One ventilator per toilet: on its short outer wall if it has one (the WC goes under it);
+       * on a long wall it goes to the corner away from the door, so the WC sits in that corner
+       * rather than in the middle of the toilet.
+       */
+      const toiletVentilator = (lr: Rect & { name: string }) => {
+        const room = made.get(lr.name)!;
+        const door = model.openings.find((o) => o.wallId.startsWith(`blk:${room.id}:`) && o.kind === 'door');
+        const doorPt = door ? pointOnWall(getWall(model, door.wallId), door.offset) : undefined;
+        const cands: { w: (typeof ext)[number]; h: boolean; lo: number; hi: number; long: boolean }[] = [];
+        for (const w of ext) {
+          const h = Math.abs(w.a.y - w.b.y) < 1;
+          const onIt = h ? Math.abs(w.a.y - lr.y0) < 3 || Math.abs(w.a.y - lr.y1) < 3 : Math.abs(w.a.x - lr.x0) < 3 || Math.abs(w.a.x - lr.x1) < 3;
+          if (!onIt) continue;
+          const [lo, hi] = h ? [Math.max(lr.x0, Math.min(w.a.x, w.b.x)), Math.min(lr.x1, Math.max(w.a.x, w.b.x))] : [Math.max(lr.y0, Math.min(w.a.y, w.b.y)), Math.min(lr.y1, Math.max(w.a.y, w.b.y))];
+          if (hi - lo < 900) continue;
+          const other = h ? lr.y1 - lr.y0 : lr.x1 - lr.x0;
+          cands.push({ w, h, lo, hi, long: hi - lo > other + 1 });
+        }
+        const c = cands.sort((a, b) => Number(a.long) - Number(b.long))[0];
+        if (!c) return;
+        const a = c.h ? c.w.a.x : c.w.a.y;
+        const dir = Math.sign((c.h ? c.w.b.x : c.w.b.y) - a) || 1;
+        let centre = (c.lo + c.hi) / 2;
+        if (c.long) {
+          const edge = 115 / 2 + 150 + 300; // clear of the corner, ventilator half-width
+          const ends = [c.lo + edge, c.hi - edge];
+          const d = doorPt ? (c.h ? doorPt.x : doorPt.y) : c.lo;
+          centre = Math.abs(ends[0]! - d) >= Math.abs(ends[1]! - d) ? ends[0]! : ends[1]!;
+        }
+        addWindow(c.w.id, (centre - a) * dir, c.hi - c.lo, 600, `${lr.name} ventilator`);
+      };
       const windowsFor = (r: Rect, label: string, width: number) => {
         for (const w of ext) {
           const h = Math.abs(w.a.y - w.b.y) < 1;
@@ -794,8 +826,12 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
         }
       };
       for (const lr of args.rooms) {
-        const width = lr.kind === 'bedroom' ? 1500 : lr.kind === 'kitchen' ? 1200 : lr.kind === 'toilet' ? 600 : lr.kind === 'service' ? 1200 : 0;
-        if (width) windowsFor(lr, `${lr.name} ${lr.kind === 'toilet' ? 'ventilator' : 'window'}`, width);
+        if (lr.kind === 'toilet') {
+          toiletVentilator(lr);
+          continue;
+        }
+        const width = lr.kind === 'bedroom' ? 1500 : lr.kind === 'kitchen' ? 1200 : lr.kind === 'service' ? 1200 : 0;
+        if (width) windowsFor(lr, `${lr.name} window`, width);
       }
       for (const z of args.zones) if (/living|dining|hall/i.test(z.name) && Math.min(z.x1 - z.x0, z.y1 - z.y0) > 2400) windowsFor(z, `${z.name} window`, 1800);
       // Service area: its own door from outside when the brief asks for it.
@@ -2139,13 +2175,31 @@ function addBlockDoorAndVent(model: BuildingModel, ctx: Ctx, room: Room) {
     const res = applyOperation(model, parseOp('add_opening', { wallId: room.bounds[doorSide], kind: 'door', width: '2\'6"', label: `${room.name} door`, roomId: room.id }));
     Object.assign(model, res.model);
   } else ctx.note(`${room.name} has no free side for a door; move it a little.`);
-  const ext = SIDES4.map((sd) => fixedWallUnder(model, room, sd)).find((w) => w && w.kind === 'external');
+  // A toilet prefers a ventilator on its short outer wall.
+  const extSides = SIDES4.filter((sd) => fixedWallUnder(model, room, sd)?.kind === 'external').sort((a, b) => len(a) - len(b));
+  const extSide = room.kind === 'toilet' ? extSides[0] : extSides[0];
+  const ext = extSide ? fixedWallUnder(model, room, extSide) : undefined;
   const win = room.kind === 'toilet' ? { w: "2'", label: 'ventilator' } : room.kind === 'bedroom' ? { w: "5'", label: 'window' } : room.kind === 'kitchen' ? { w: "4'", label: 'window' } : undefined;
   if (ext && win) {
     for (const width of [win.w, "3'", "2'"]) {
       try {
         const res = applyOperation(model, parseOp('add_opening', { wallId: ext.id, kind: 'window', width, label: `${room.name} ${win.label}`, roomId: room.id }));
         Object.assign(model, res.model);
+        // On a toilet's long wall the ventilator goes to the corner away from the door (the WC goes under it).
+        const other = extSide === 'top' || extSide === 'bottom' ? r.y1 - r.y0 : r.x1 - r.x0;
+        if (room.kind === 'toilet' && extSide && len(extSide) > other + 1) {
+          const v = model.openings[model.openings.length - 1]!;
+          const h = extSide === 'top' || extSide === 'bottom';
+          const door = model.openings.find((o) => o.kind === 'door' && o.wallId === room.bounds[doorSide ?? 'top']);
+          const dp = door ? pointOnWall(getWall(model, door.wallId), door.offset) : undefined;
+          const [lo, hi] = h ? [r.x0, r.x1] : [r.y0, r.y1];
+          const ends = [lo + v.width / 2 + 150, hi - v.width / 2 - 150];
+          const d = dp ? (h ? dp.x : dp.y) : lo;
+          const centre = Math.abs(ends[0]! - d) >= Math.abs(ends[1]! - d) ? ends[0]! : ends[1]!;
+          const a = h ? ext.a.x : ext.a.y;
+          const dir = Math.sign((h ? ext.b.x : ext.b.y) - a) || 1;
+          v.offset = Math.round((centre - a) * dir);
+        }
         break;
       } catch {
         /* try narrower */
