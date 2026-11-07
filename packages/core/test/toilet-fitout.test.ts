@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyOperation, getWall, parseOperation, planScheme, pointOnWall, roomClearRect, roomOpeningsOn, SCHEMES, startDesign } from '../src';
+import { applyOperation, getWall, itemFootprint, parseOperation, planScheme, pointOnWall, roomClearRect, roomOpeningsOn, SCHEMES, startDesign } from '../src';
 
 const op = (n: string, a: unknown) => parseOperation(n, a);
 
@@ -96,5 +96,26 @@ describe('toilets at the corners', () => {
         expect(roomOpeningsOn(m, t, short).some((o) => o.kind === 'window'), `${name} ventilator on its short wall`).toBe(true);
       }
     }
+  });
+});
+
+describe('shower area', () => {
+  it('stays inside the toilet walls and runs wall to wall across its end', () => {
+    let n = 0;
+    for (const [ew, ns] of [["50'", "30'"], ["60'", "40'"], ["35'", "52'6\""]]) {
+      const base = startDesign('shell', [op('set_plot', { eastWest: ew, northSouth: ns }), op('set_setback', { side: 'all', distance: "0'" })], 'T').model;
+      for (const sc of SCHEMES) for (const x of [false, true]) {
+        const m = applyOperation(base, op('apply_layout', planScheme(base, sc, { bedrooms: 3, toilets: 3, pooja: true, stores: 0 }, { x }))).model;
+        for (const f of m.furniture.filter((f) => f.catalogueId === 'shower')) {
+          const r = roomClearRect(m, m.rooms.find((t) => t.id === f.roomId)!);
+          const q = itemFootprint(f);
+          const gaps = [q.x0 - r.x0, r.x1 - q.x1, q.y0 - r.y0, r.y1 - q.y1];
+          expect(Math.min(...gaps), 'never crosses a wall').toBeGreaterThan(-2);
+          expect(gaps.filter((g) => Math.abs(g) < 2).length, 'against three walls').toBeGreaterThanOrEqual(3);
+          n++;
+        }
+      }
+    }
+    expect(n).toBeGreaterThan(40);
   });
 });

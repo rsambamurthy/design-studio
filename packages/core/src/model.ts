@@ -89,6 +89,8 @@ export interface FurnitureItem {
   rotation: number;
   /** Mirror for handed items (e.g. chaise left vs right). */
   mirrored: boolean;
+  /** Size when it differs from the catalogue's (a shower area cut to fit wall to wall). */
+  size?: { width: number; depth: number };
 }
 
 export type PlanSide = 'top' | 'bottom' | 'left' | 'right';

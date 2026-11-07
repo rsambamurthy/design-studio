@@ -92,25 +92,14 @@ function toiletByWindow(model: BuildingModel, room: Room): FurnitureItem[] | und
     const depth = horizontal ? r.y1 - r.y0 : r.x1 - r.x0;
     const wc = onWall(room, r, side, 'wc-floor', along);
     const items: FurnitureItem[] = [wc];
-    // Shower on the opposite wall, facing the WC, if the WC's leg room still leaves space for it.
-    // A shower area is open floor, so the door may swing over it.
+    // The shower area runs wall to wall across one end of the toilet, inside its walls and clear of
+    // the door opening: on the wall opposite the WC when the toilet is deep enough, else at the far
+    // end of the window wall. (The door may swing over it; it is open floor.)
     const doorAt = doorSide(model, room);
-    if (doorAt === OPP[side]) {
-      // The door is where the shower would go: keep the shower away from the door, beside the WC.
-      const [lo, hi] = horizontal ? [r.x0, r.x1] : [r.y0, r.y1];
-      const far = along - lo > hi - along ? lo : hi;
-      const sh = onWall(room, r, side, 'shower', far);
-      if (!rectsOverlap(itemFootprint(sh), itemFootprint(wc), 5)) items.push(sh);
-    } else if (depth >= 700 + 450 + 900) {
-      const sh = onWall(room, r, OPP[side], 'shower', along);
-      if (!rectsOverlap(itemFootprint(sh), itemFootprint(wc), 5)) items.push(sh);
-    } else {
-      // A shallow toilet with the window on its long wall: the WC is in one corner, the shower at the other end.
-      const [lo, hi] = horizontal ? [r.x0, r.x1] : [r.y0, r.y1];
-      const far = along - lo > hi - along ? lo : hi;
-      const sh = onWall(room, r, side, 'shower', far);
-      if (!rectsOverlap(itemFootprint(sh), itemFootprint(wc), 5)) items.push(sh);
-    }
+    const [lo, hi] = horizontal ? [r.x0, r.x1] : [r.y0, r.y1];
+    const farEnd: PlanSide = along - lo > hi - along ? (horizontal ? 'left' : 'top') : horizontal ? 'right' : 'bottom';
+    const sh = (doorAt !== OPP[side] && depth >= 700 + 450 + 900 ? showerArea(model, room, r, OPP[side], [wc]) : undefined) ?? showerArea(model, room, r, farEnd, [wc]);
+    if (sh) items.push(sh);
     // Basin on a side wall, half way between the window wall and the opposite wall.
     const mid = horizontal ? (r.y0 + r.y1) / 2 : (r.x0 + r.x1) / 2;
     const perp: PlanSide[] = horizontal ? ['left', 'right'] : ['top', 'bottom'];
@@ -137,6 +126,45 @@ function toiletByWindow(model: BuildingModel, room: Room): FurnitureItem[] | und
     return items.filter((f) => f.catalogueId === 'shower' || clear(model, room, [f]));
   }
   return undefined;
+}
+
+/**
+ * A shower area against wall `end`, running the full clear length of that wall
+ * (so it is bounded by the walls on both sides) and 900 deep, cut back so it
+ * stops short of any door opening on the side walls and of the given items.
+ */
+function showerArea(model: BuildingModel, room: Room, r: Rect, end: PlanSide, avoid: FurnitureItem[]): FurnitureItem | undefined {
+  const horizontal = end === 'top' || end === 'bottom';
+  const span = horizontal ? r.x1 - r.x0 : r.y1 - r.y0;
+  const sign = end === 'top' || end === 'left' ? 1 : -1;
+  const base = end === 'top' ? r.y0 : end === 'bottom' ? r.y1 : end === 'left' ? r.x0 : r.x1;
+  // Never in front of the way in.
+  if (roomOpeningsOn(model, room, end).some((o) => o.kind === 'door' || o.kind === 'opening' || o.kind === 'sliding')) return undefined;
+  let d = 900;
+  // Door openings on the two side walls: stop the shower at the door's jamb.
+  const sides: PlanSide[] = horizontal ? ['left', 'right'] : ['top', 'bottom'];
+  for (const s of sides) {
+    for (const o of roomOpeningsOn(model, room, s)) {
+      if (o.kind !== 'door' && o.kind !== 'opening' && o.kind !== 'sliding') continue;
+      const p = pointOnWall(getWall(model, o.wallId), o.offset);
+      const at = horizontal ? p.y : p.x;
+      const near = sign > 0 ? at - o.width / 2 - base : base - (at + o.width / 2);
+      if (near < d && sign * (at - base) + o.width / 2 > 0) d = Math.min(d, Math.max(0, near));
+    }
+  }
+  // Keep off the WC and anything else already placed.
+  for (const f of avoid) {
+    const q = itemFootprint(f);
+    const overlapsAlong = horizontal ? q.x1 > r.x0 && q.x0 < r.x1 : q.y1 > r.y0 && q.y0 < r.y1;
+    if (!overlapsAlong) continue;
+    const near = end === 'top' ? q.y0 - base : end === 'bottom' ? base - q.y1 : end === 'left' ? q.x0 - base : base - q.x1;
+    if (near > 0) d = Math.min(d, near - 50);
+  }
+  if (d < 750) return undefined;
+  const mid = horizontal ? (r.x0 + r.x1) / 2 : (r.y0 + r.y1) / 2;
+  const c = base + (sign * d) / 2;
+  const at = horizontal ? { x: Math.round(mid), y: Math.round(c) } : { x: Math.round(c), y: Math.round(mid) };
+  return { id: '', catalogueId: 'shower', label: 'Shower area', roomId: room.id, at, rotation: ROT[end], mirrored: false, size: { width: Math.round(span), depth: Math.round(d) } };
 }
 
 /** Add the standard fixtures to a toilet or kitchen that has none. Returns the items added. */

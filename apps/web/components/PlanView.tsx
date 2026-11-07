@@ -553,8 +553,8 @@ function OpeningShape({ model, o, hot, hit = false }: { model: BuildingModel; o:
 
 function FurnitureShape({ f, hot }: { f: FurnitureItem; hot: boolean }) {
   const c = getCatalogueItem(f.catalogueId);
-  const W = c?.width ?? 1000;
-  const D = c?.depth ?? 600;
+  const W = f.size?.width ?? c?.width ?? 1000;
+  const D = f.size?.depth ?? c?.depth ?? 600;
   const x0 = -W / 2;
   const y0 = -D / 2;
   // Local frame: front faces +y, back at -y. Sitting on it, your right is -x.

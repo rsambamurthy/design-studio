@@ -62,8 +62,8 @@ export function matchCatalogue(text: string): CatalogueItem | undefined {
 /** Axis-aligned footprint of a placed item (rotation in multiples of 90°). */
 export function itemFootprint(f: FurnitureItem): Rect {
   const c = getCatalogueItem(f.catalogueId);
-  const w = c?.width ?? 1000;
-  const d = c?.depth ?? 600;
+  const w = f.size?.width ?? c?.width ?? 1000;
+  const d = f.size?.depth ?? c?.depth ?? 600;
   const quarter = (((Math.round(f.rotation / 90) % 4) + 4) % 4);
   const [sx, sy] = quarter % 2 === 0 ? [w, d] : [d, w];
   return { x0: f.at.x - sx / 2, x1: f.at.x + sx / 2, y0: f.at.y - sy / 2, y1: f.at.y + sy / 2 };
