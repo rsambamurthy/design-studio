@@ -716,6 +716,8 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       model.rooms = model.rooms.filter((r) => !blocks.has(r.id));
       model.openings = model.openings.filter((o) => !o.wallId.startsWith('blk:') && model.walls.find((w) => w.id === o.wallId)?.kind !== 'external');
       model.furniture = model.furniture.filter((f) => model.rooms.some((r) => r.id === f.roomId) && f.roomId !== host.id);
+      // Stairs and lifts stay (they are the building's, not the layout's); they are stood again after.
+      const keepCores = coresOf(model).map((c) => structuredClone(c));
       model.cores = [];
       host.name = 'Living / Dining';
       const made = new Map<string, Room>();
@@ -808,6 +810,34 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
         }
       }
       Object.assign(model, fitOutAll(model));
+      // Stand the stair and lift again: beside a lobby if the layout has one, else near the foyer / living area.
+      if (keepCores.length) {
+        const lobby = model.rooms.find((r) => r.kind === 'lobby' && r.block);
+        const near = args.zones.find((z) => z.name === 'Foyer') ?? args.zones.find((z) => z.name === 'Living') ?? args.zones[0];
+        const px = near ? (near.x0 + near.x1) / 2 : 0;
+        const py = near ? (near.y0 + near.y1) / 2 : 0;
+        for (const c of keepCores) {
+          c.at = { x: 0, y: 0 };
+          let placed = !!lobby && placeByLobby(model, c, lobby, px, py);
+          if (!placed) {
+            const t = c.enclosure?.thickness ?? 0;
+            for (const rot of [c.rotation, (c.rotation + 90) % 360]) {
+              const fp0 = coreFootprint({ ...c, rotation: rot, at: { x: 0, y: 0 } });
+              const spot = freeSpots(model, host, fp0.x1 - fp0.x0 + 2 * t, fp0.y1 - fp0.y0 + 2 * t).sort((a, b) => Math.hypot((a.x0 + a.x1) / 2 - px, (a.y0 + a.y1) / 2 - py) - Math.hypot((b.x0 + b.x1) / 2 - px, (b.y0 + b.y1) / 2 - py))[0];
+              if (spot) {
+                c.rotation = rot;
+                c.roomId = host.id;
+                c.at = { x: Math.round((spot.x0 + spot.x1) / 2), y: Math.round((spot.y0 + spot.y1) / 2) };
+                settleCore(model, c);
+                placed = true;
+                break;
+              }
+            }
+          }
+          if (placed) model.cores = [...coresOf(model), c];
+          else ctx.note(`There's no free space for the ${c.label.toLowerCase()} in this layout; add it again where you want it.`);
+        }
+      }
       ctx.touch(...model.rooms.map((r) => r.id));
       const beds = args.rooms.filter((r) => r.kind === 'bedroom').length;
       const toilets = args.rooms.filter((r) => r.kind === 'toilet').length;
@@ -1903,9 +1933,97 @@ function roomAtPoint(model: BuildingModel, x?: number, y?: number): Room {
   return room;
 }
 
+/**
+ * Stand a stair or lift in the open space against a lobby, its entry facing
+ * the lobby: on the lobby side nearest (x, y) first, then the others. False if
+ * there's no room around the lobby.
+ */
+function placeByLobby(model: BuildingModel, c: CoreElement, lobby: Room, x: number, y: number): boolean {
+  const open = model.rooms.find((r) => !r.block && (r.kind === 'living' || r.kind === 'dining'));
+  if (!open || !lobby.block) return false;
+  const lb = lobby.block;
+  const t = c.enclosure?.thickness ?? 0;
+  const area = roomClearRect(model, open);
+  // Door leaves sweep a square in front of the door, both ways (kept clear for the lobby's own door too).
+  const swings = model.openings
+    .filter((o) => o.kind === 'door' || o.kind === 'opening')
+    .map((o) => {
+      const w = getWall(model, o.wallId);
+      const pt = pointOnWall(w, o.offset);
+      const along = o.width / 2 + 50;
+      const deep = o.width + w.thickness / 2 + 10;
+      return Math.abs(w.a.y - w.b.y) < 1 ? { x0: pt.x - along, x1: pt.x + along, y0: pt.y - deep, y1: pt.y + deep } : { x0: pt.x - deep, x1: pt.x + deep, y0: pt.y - along, y1: pt.y + along };
+    });
+  const taken = [...blockOuterRects(model), ...swings, ...coresOf(model).filter((o) => o.id !== c.id).map((o) => { const f = coreFootprint(o); const ot = o.enclosure?.thickness ?? 0; return { x0: f.x0 - ot, x1: f.x1 + ot, y0: f.y0 - ot, y1: f.y1 + ot }; })];
+  // Rotation that turns the entry towards the lobby, for the core on each side of it.
+  const sides: { side: PlanSide4; rot: number }[] = [
+    { side: 'top', rot: 0 },
+    { side: 'bottom', rot: 180 },
+    { side: 'left', rot: 270 },
+    { side: 'right', rot: 90 },
+  ];
+  const cx = (lb.x0 + lb.x1) / 2;
+  const cy = (lb.y0 + lb.y1) / 2;
+  sides.sort((a, b) => {
+    const d = (s: PlanSide4) => (s === 'top' ? Math.abs(y - lb.y0) : s === 'bottom' ? Math.abs(y - lb.y1) : s === 'left' ? Math.abs(x - lb.x0) : Math.abs(x - lb.x1));
+    return d(a.side) - d(b.side);
+  });
+  for (const { side, rot } of sides) {
+    const fp = coreFootprint({ ...c, rotation: rot, at: { x: 0, y: 0 } });
+    const w = fp.x1 - fp.x0;
+    const h = fp.y1 - fp.y0;
+    const half = lobby.block.thickness / 2;
+    // Positions along the lobby side: the end nearer the drop point, the other end (leaving room
+    // for the next unit), then the drop point itself and the middle.
+    const horiz = side === 'top' || side === 'bottom';
+    const ends = horiz ? [lb.x0 + half + t + w / 2, lb.x1 - half - t - w / 2] : [lb.y0 + half + t + h / 2, lb.y1 - half - t - h / 2];
+    const p = horiz ? x : y;
+    ends.sort((a, b) => Math.abs(a - p) - Math.abs(b - p));
+    const along = [...ends, p, horiz ? cx : cy];
+    for (const a of along) {
+      const at =
+        side === 'top' ? { x: a, y: lb.y0 - half - t - h / 2 } : side === 'bottom' ? { x: a, y: lb.y1 + half + t + h / 2 } : side === 'left' ? { x: lb.x0 - half - t - w / 2, y: a } : { x: lb.x1 + half + t + w / 2, y: a };
+      // Close to an outer wall: sit flush against it (its own wall there isn't needed).
+      if (horiz) {
+        if (at.x + w / 2 > area.x1 - t - 1) at.x = area.x1 - w / 2;
+        if (at.x - w / 2 < area.x0 + t + 1) at.x = area.x0 + w / 2;
+      } else {
+        if (at.y + h / 2 > area.y1 - t - 1) at.y = area.y1 - h / 2;
+        if (at.y - h / 2 < area.y0 + t + 1) at.y = area.y0 + h / 2;
+      }
+      // The entry must face the lobby itself, so the core has to overlap the lobby along that side.
+      const overlap = side === 'top' || side === 'bottom' ? Math.min(at.x + w / 2, lb.x1) - Math.max(at.x - w / 2, lb.x0) : Math.min(at.y + h / 2, lb.y1) - Math.max(at.y - h / 2, lb.y0);
+      if (overlap < Math.min(w, h) * 0.6) continue;
+      const flush = (v: number, edge: number) => Math.abs(v - edge) < 2;
+      const outer = {
+        x0: at.x - w / 2 - (flush(at.x - w / 2, area.x0) ? 0 : t),
+        x1: at.x + w / 2 + (flush(at.x + w / 2, area.x1) ? 0 : t),
+        y0: at.y - h / 2 - (flush(at.y - h / 2, area.y0) ? 0 : t),
+        y1: at.y + h / 2 + (flush(at.y + h / 2, area.y1) ? 0 : t),
+      };
+      if (at.x - w / 2 < area.x0 - 1 || at.x + w / 2 > area.x1 + 1 || at.y - h / 2 < area.y0 - 1 || at.y + h / 2 > area.y1 + 1) continue;
+      // Its own walls must stay inside the building too.
+      if (outer.x0 < area.x0 - 1 || outer.x1 > area.x1 + 1 || outer.y0 < area.y0 - 1 || outer.y1 > area.y1 + 1) continue;
+      if (taken.some((q) => outer.x0 < q.x1 - 2 && outer.x1 > q.x0 + 2 && outer.y0 < q.y1 - 2 && outer.y1 > q.y0 + 2)) continue;
+      c.rotation = rot;
+      c.roomId = open.id;
+      c.at = { x: Math.round(at.x), y: Math.round(at.y) };
+      // Loose furniture in the way (a dining table, say) makes room.
+      const gone = model.furniture.filter((f) => f.roomId === open.id && rectsOverlap(itemFootprint(f), outer, 5));
+      if (gone.length) model.furniture = model.furniture.filter((f) => !gone.includes(f));
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Put a new stair or lift centred at a point (inside its room), then let it settle against a wall. */
 function dropCore(model: BuildingModel, c: CoreElement, roomIn: Room, x: number, y: number) {
   let room = roomIn;
+  // Dropped on (or added for) a lobby: it goes beside the lobby and opens into it.
+  if (room.kind === 'lobby' && placeByLobby(model, c, room, x, y)) return;
+  const lobby = model.rooms.find((r) => r.kind === 'lobby' && r.block);
+  if (lobby && room.block && room.kind !== 'stair' && room.kind !== 'lift' && placeByLobby(model, c, lobby, x, y)) return;
   const fitsIn = (rm: Room) => {
     const rr = roomClearRect(model, rm);
     const fp0 = coreFootprint({ ...c, at: { x: 0, y: 0 } });
@@ -1915,8 +2033,9 @@ function dropCore(model: BuildingModel, c: CoreElement, roomIn: Room, x: number,
     const H = rr.y1 - rr.y0;
     return (a <= W + 1 && b <= H + 1) || (b <= W + 1 && a <= H + 1);
   };
-  if (room.block && !fitsIn(room)) {
-    // Too big for that room: stand it in the nearest free spot of the open space instead.
+  if (room.block && (!fitsIn(room) || (room.kind !== 'stair' && room.kind !== 'lift'))) {
+    // A stair or lift is its own unit, never inside a lobby or other room (and some are too big anyway):
+    // stand it in the nearest free spot of the open space.
     const open = model.rooms.find((r) => !r.block && (r.kind === 'living' || r.kind === 'dining'));
     if (open) {
       room = open;

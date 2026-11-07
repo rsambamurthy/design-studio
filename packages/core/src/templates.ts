@@ -115,15 +115,13 @@ function oneBhk(): BuildingModel {
   };
 }
 
-/** 3BHK with a lobby holding a walled staircase and lift shaft, both movable. */
+/** 3BHK flat with a lobby; the stair and lift (when chosen) are their own units beside it. */
 function threeBhk(): BuildingModel {
   let m: BuildingModel = { ...resizeLayout(sampleModel(), L("48'"), L("34'")).model, id: 'template-3bhk', name: '3BHK Flat', levelName: 'Typical floor' };
   const op = (name: string, args: Record<string, unknown>) => {
     m = applyOperation(m, parseOperation(name, args)).model;
   };
   op('rename_room', { roomId: 'r-lobby', name: 'Lobby' });
-  op('add_stair', { roomId: 'r-lobby', type: 'dog-legged', corner: 'south-east' });
-  op('add_lift', { roomId: 'r-lobby', persons: '6', corner: 'north-east' });
   return { ...m, revision: 1 };
 }
 
@@ -161,7 +159,7 @@ export const TEMPLATES: Template[] = [
   {
     id: '3bhk',
     name: '3BHK flat',
-    description: '3 bedrooms, 2 toilets, kitchen, living/dining, lobby with stair and lift.',
+    description: '3 bedrooms, 2 toilets, kitchen, living/dining and a lobby.',
     build: () => fitOutAll(toBlocks(threeBhk())),
   },
   { id: '2bhk', name: '2BHK flat', description: '2 bedrooms, 2 toilets, kitchen, living/dining.', build: () => fitOutAll(toBlocks(twoBhk())) },

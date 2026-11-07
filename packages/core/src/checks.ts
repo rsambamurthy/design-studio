@@ -5,7 +5,7 @@
  */
 import { getCatalogueItem, itemFootprint } from './catalogue';
 import { rectSize, rectsOverlap, roomClearRect, wallDir, pointOnWall, type Rect } from './geometry';
-import { fixedWallUnder, getWall, type BuildingModel, type FurnitureItem, type Opening, type PlanSide, type Point } from './model';
+import { fixedWallUnder, getWall, type BuildingModel, type FurnitureItem, type Opening, type PlanSide, type Point, type Room } from './model';
 import { PLAN_SIDES, boundaryGaps, circleHitsRect, footprintOnPlot, sideToCompass } from './site';
 import { MAX_RISER, coresOf, enclosureOf } from './cores';
 import { blocksOverlap, coincidentSides } from './blocks';
@@ -96,6 +96,7 @@ export function runChecks(model: BuildingModel): Issue[] {
   }
 
   issues.push(...coreChecks(model, swings));
+  issues.push(...entranceChecks(model));
   issues.push(...plumbingChecks(model));
   issues.push(...blockChecks(model));
   issues.push(...siteChecks(model));
@@ -372,4 +373,35 @@ function blockChecks(model: BuildingModel): Issue[] {
 /** Marker spot in a room's top-left corner, clear of its name. */
 function corner(r: Rect): Point {
   return { x: r.x0 + 320, y: r.y0 + 320 };
+}
+
+/**
+ * The house is entered through the living area: a door in an outer wall
+ * must not open straight into a bedroom, kitchen, toilet or other room.
+ * A lift is only for a building of more than one floor.
+ */
+function entranceChecks(model: BuildingModel): Issue[] {
+  const out: Issue[] = [];
+  const PRIVATE: Room['kind'][] = ['bedroom', 'kitchen', 'toilet', 'service', 'pooja', 'other', 'stair', 'lift'];
+  for (const o of model.openings) {
+    if (o.kind !== 'door' && o.kind !== 'sliding') continue;
+    const w = model.walls.find((x) => x.id === o.wallId);
+    if (!w || w.kind !== 'external') continue;
+    const p = pointOnWall(w, o.offset);
+    const h = Math.abs(w.a.y - w.b.y) < 1;
+    // Look a little inside the wall on both sides; the building side is the one inside a room.
+    for (const d of [-1, 1]) {
+      const q = h ? { x: p.x, y: p.y + d * (w.thickness / 2 + 300) } : { x: p.x + d * (w.thickness / 2 + 300), y: p.y };
+      const inBlock = model.rooms.find((r) => r.block && q.x > r.block.x0 && q.x < r.block.x1 && q.y > r.block.y0 && q.y < r.block.y1);
+      const inRoom = inBlock ?? model.rooms.find((r) => !r.block && (() => { const c = roomClearRect(model, r); return q.x > c.x0 && q.x < c.x1 && q.y > c.y0 && q.y < c.y1; })());
+      if (inRoom && PRIVATE.includes(inRoom.kind) && o.kind === 'door' && !/balcony|sit-?out|utility|service/i.test(o.label)) {
+        out.push({ code: 'entrance.into-room', severity: 'warning', message: `${o.label} opens from outside straight into ${inRoom.name}; the entrance should open into the living area.`, entityIds: [o.id, inRoom.id], at: q });
+      }
+    }
+  }
+  const floors = model.structure?.floors ?? ((model.cores ?? []).some((c) => c.kind === 'stair') ? 2 : 1);
+  for (const c of model.cores ?? []) {
+    if (c.kind === 'lift' && floors <= 1) out.push({ code: 'core.lift-single-floor', severity: 'advisory', message: `${c.label} in a single-floor design: a lift is only needed when there is more than one floor.`, entityIds: [c.id], at: c.at });
+  }
+  return out;
 }

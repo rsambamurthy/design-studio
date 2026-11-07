@@ -18,15 +18,24 @@ const op = (n: string, a: unknown) => parseOperation(n, a);
 const apply = (m: BuildingModel, n: string, a: unknown) => applyOperation(m, op(n, a));
 const room = (m: BuildingModel, name: string) => m.rooms.find((r) => r.name === name)!;
 const errors = (m: BuildingModel) => runChecks(m).filter((i) => i.severity === 'error');
+/** The 3BHK flat with a stair and lift chosen (they stand beside the lobby, opening into it). */
+const withCores = (plot: ReturnType<typeof op>[] = []) => startDesign('3bhk', plot, 'T', { core: 'both' }).model;
 
 describe('stair and lift', () => {
-  it('3BHK template has a walled stair and lift in the lobby, with no errors', () => {
-    const m = TEMPLATES.find((t) => t.id === '3bhk')!.build();
+  it('the stair and lift are their own walled units beside the lobby, opening into it', () => {
+    const m = withCores();
     expect(m.cores!.map((c) => c.kind).sort()).toEqual(['lift', 'stair']);
-    expect(m.cores!.every((c) => c.roomId === 'r-lobby' && !!c.enclosure)).toBe(true);
-    expect(room(m, 'Lobby')).toBeTruthy();
-    for (const c of m.cores!) expect(enclosureOf(m, c).walls.length).toBeGreaterThan(0);
-    expect(runChecks(m).filter((i) => i.code.startsWith('core'))).toEqual([]);
+    const lobby = room(m, 'Lobby');
+    expect(m.cores!.every((c) => c.roomId !== lobby.id && !!c.enclosure)).toBe(true);
+    // The stair always; the lift too when there's space left beside the lobby (here the stair takes it).
+    for (const c of m.cores!.filter((x) => x.kind === 'stair')) {
+      const f = coreFootprint(c);
+      const b = lobby.block!;
+      const t = (c.enclosure?.thickness ?? 0) + b.thickness / 2;
+      const touches = Math.abs(f.y1 + t - b.y0) < 5 || Math.abs(f.y0 - t - b.y1) < 5 || Math.abs(f.x1 + t - b.x0) < 5 || Math.abs(f.x0 - t - b.x1) < 5;
+      expect(touches, c.label).toBe(true);
+    }
+    expect(runChecks(m).filter((i) => i.code.startsWith('core') && i.severity !== 'advisory')).toEqual([]);
     expect(errors(m)).toEqual([]);
   });
 
@@ -39,20 +48,19 @@ describe('stair and lift', () => {
 
   it('the stair and lift fit narrow and wide plinths', () => {
     for (const [ew, ns, sb] of [["60'", "40'", "5'"], ["30'", "60'", "3'"], ["40'", "60'", "5'"], ["60'", "40'", "0"]] as const) {
-      const { model } = startDesign('3bhk', [op('set_plot', { eastWest: ew, northSouth: ns }), op('set_setback', { side: 'all', distance: sb })], 'T');
+      const model = withCores([op('set_plot', { eastWest: ew, northSouth: ns }), op('set_setback', { side: 'all', distance: sb })]);
       expect(model.cores!.length).toBe(2);
       expect(errors(model), `${ew} × ${ns}`).toEqual([]);
     }
   });
 
   it('a lift can be moved into another room, and snaps flush to a wall', () => {
-    const m = TEMPLATES.find((t) => t.id === '3bhk')!.build();
+    const m = withCores();
     const lift = m.cores!.find((c) => c.kind === 'lift')!;
-    // Far west, into the living room.
+    // Far west, across the living room.
     const r = apply(m, 'move_core', { coreId: lift.id, direction: 'west', distance: "20'" });
     const moved = r.model.cores!.find((c) => c.id === lift.id)!;
     expect(moved.roomId).toBe('r-living');
-    expect(r.summary).toMatch(/into Living \/ Dining/);
     // Nudge it near the living room's north wall: it snaps flush.
     const down = apply(r.model, 'move_core', { coreId: lift.id, direction: 'south', distance: '1000 mm' }).model;
     const liv = roomClearRect(down, room(down, 'Living / Dining'));
@@ -63,26 +71,14 @@ describe('stair and lift', () => {
   });
 
   it('warns when the lift door faces a wall', () => {
-    const m = TEMPLATES.find((t) => t.id === '3bhk')!.build();
+    const m = withCores();
     const lift = m.cores!.find((c) => c.kind === 'lift')!;
-    const r = apply(m, 'rotate_core', { coreId: lift.id, degrees: '180' });
+    // Push it against the front wall with its door facing that wall.
+    let r = apply(m, 'move_core', { coreId: lift.id, direction: 'south', distance: "20'" });
+    const side = (rot: number) => (['bottom', 'left', 'top', 'right'] as const)[((Math.round(rot / 90) % 4) + 4) % 4];
+    const now = r.model.cores!.find((c) => c.id === lift.id)!;
+    if (side(now.rotation) !== 'bottom') r = apply(r.model, 'rotate_core', { coreId: lift.id, degrees: String((360 - now.rotation) % 360 || 180) as '90' });
     expect(runChecks(r.model).some((i) => i.code === 'core.entry-blocked')).toBe(true);
-  });
-
-  it('moving the lobby (swapping it with a room of similar size) takes the stair and lift along', () => {
-    const m = startDesign('3bhk', [op('set_plot', { eastWest: "60'", northSouth: "40'" })], 'T').model;
-    const r = apply(m, 'swap_rooms', { roomA: 'r-lobby', roomB: 'r-bed3' });
-    expect(room(r.model, 'Lobby').id).toBe('r-bed3');
-    expect(r.model.cores!.every((c) => c.roomId === 'r-bed3')).toBe(true);
-    expect(r.model.openings.find((o) => o.id === 'd-bed3')!.label).toBe('Main door');
-    expect(r.model.openings.find((o) => o.id === 'd-main')!.label).toBe('Bed 3 door');
-    expect(runChecks(r.model).filter((i) => i.code.startsWith('core') && i.severity !== 'advisory')).toEqual([]);
-  });
-
-  it('says so when the stair and lift don\'t fit the lobby\'s new space', () => {
-    const m = TEMPLATES.find((t) => t.id === '3bhk')!.build();
-    const r = apply(m, 'swap_rooms', { roomA: 'r-lobby', roomB: 'r-bed3' });
-    expect(r.assumptions.join(' ')).toMatch(/doesn't fit well in Lobby's new space/);
   });
 
   it('starting a design can drop the lift, or both', () => {
@@ -138,7 +134,7 @@ describe('stair and lift', () => {
   });
 
   it('the assistant can find them by name', () => {
-    const m = TEMPLATES.find((t) => t.id === '3bhk')!.build();
+    const m = withCores();
     expect(findEntities(m, 'move the staircase')[0]!.type).toBe('core');
     expect(findEntities(m, 'the lift')[0]!.label).toMatch(/Lift/);
     expect(modelSummary(m)).toMatch(/STAIRS & LIFTS/);
@@ -149,7 +145,7 @@ describe('stair and lift', () => {
       op('set_plot', { eastWest: "30'", northSouth: "60'" }),
       op('set_setback', { side: 'all', distance: "3'" }),
     ];
-    const { model } = startDesign('3bhk', plot, 'T');
+    const model = withCores(plot);
     expect(model.cores!.length).toBe(2);
     for (const c of model.cores!) {
       const rr = roomClearRect(model, model.rooms.find((r) => r.id === c.roomId)!);

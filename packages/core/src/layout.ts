@@ -127,11 +127,18 @@ export interface RoomCounts {
   toilets?: number;
   /** Stair and lift: both, stair only, or none. Left out = as the layout comes. */
   core?: 'both' | 'stair' | 'none';
+  /** Floors in the building (1 = ground only). More than one brings a stair; a lift only if asked for. */
+  floors?: number;
+  /** Add a lift (only with more than one floor). */
+  lift?: boolean;
 }
 
 export function startDesign(templateId: string, siteOps: Operation[], name: string, counts: RoomCounts = {}): StartResult {
   const notes: string[] = [];
-  if (templateId === 'shell') counts = {};
+  if (templateId === 'shell') counts = { floors: counts.floors, lift: counts.lift };
+  // Floors decide the stair; the lift is optional and only for more than one floor.
+  if (counts.floors) counts = { ...counts, core: counts.floors > 1 ? (counts.lift ? 'both' : 'stair') : 'none' };
+  const withFloors = (m: BuildingModel): BuildingModel => (counts.floors ? { ...m, structure: { ...(m.structure ?? {}), floors: counts.floors } } : m);
   if (counts.bedrooms && templateId === 'auto') templateId = `${counts.bedrooms}bhk`;
   const auto = templateId === 'auto';
   const first = getTemplate(auto ? '3bhk' : templateId);
@@ -149,7 +156,7 @@ export function startDesign(templateId: string, siteOps: Operation[], name: stri
     notes.push(`Started from the ${first.name} template`);
     if (counts.core) model = adjustCores(model, counts.core, notes);
     if (counts.toilets) model = adjustToilets(model, counts.toilets, notes);
-    return { model: { ...model, revision: 1 }, ops: siteOps, notes };
+    return { model: { ...withFloors(model), revision: 1 }, ops: siteOps, notes };
   }
 
   // 2. Choose the layout for the plinth (or orient the requested one).
@@ -180,7 +187,7 @@ export function startDesign(templateId: string, siteOps: Operation[], name: stri
   notes.push(`sized to the ${formatLength(pw, 'ft-in')} × ${formatLength(ph, 'ft-in')} plinth`);
   if (counts.core) model = adjustCores(model, counts.core, notes);
   if (counts.toilets) model = adjustToilets(model, counts.toilets, notes);
-  return { model: { ...model, revision: 1 }, ops: [...siteOps, fit], notes };
+  return { model: { ...withFloors(model), revision: 1 }, ops: [...siteOps, fit], notes };
 }
 
 /**
@@ -242,13 +249,30 @@ export function adjustCores(input: BuildingModel, choice: 'both' | 'stair' | 'no
       notes.push(`no ${c.kind}`);
     }
   }
-  const host = m.rooms.find((r) => r.kind === 'lobby') ?? m.rooms.find((r) => r.kind === 'living');
+  // Stair and lift are their own walled units in the open space, beside the lobby when there is one (never inside it).
+  let lobby = m.rooms.find((r) => r.kind === 'lobby');
+  if (lobby?.block && (want.stair || want.lift) && !(m.cores ?? []).length) {
+    // A lobby is a landing, not a hall: trim a deep one to about 5' so the stair and lift can stand beside it.
+    const c = roomClearRect(m, lobby);
+    const [w, d] = [c.x1 - c.x0, c.y1 - c.y0];
+    try {
+      if (d > 2400 && d >= w) run('set_room_size', { roomId: lobby.id, width: `${Math.round(w)} mm`, depth: '1524 mm' });
+      else if (w > 2400 && w > d) run('set_room_size', { roomId: lobby.id, width: '1524 mm', depth: `${Math.round(d)} mm` });
+    } catch {
+      /* keep it as it is */
+    }
+    lobby = m.rooms.find((r) => r.kind === 'lobby');
+  }
+  const host = m.rooms.find((r) => !r.block && (r.kind === 'living' || r.kind === 'dining')) ?? m.rooms.find((r) => r.kind === 'living');
   if (!host) return m;
   for (const kind of ['stair', 'lift'] as const) {
     if (!want[kind] || (m.cores ?? []).some((c) => c.kind === kind)) continue;
     try {
-      run(kind === 'stair' ? 'add_stair' : 'add_lift', { roomId: host.id });
-      notes.push(`${kind} added in ${host.name}`);
+      if (lobby) {
+        const c = roomClearRect(m, lobby);
+        run(kind === 'stair' ? 'add_stair' : 'add_lift', { x: Math.round((c.x0 + c.x1) / 2), y: Math.round((c.y0 + c.y1) / 2) });
+      } else run(kind === 'stair' ? 'add_stair' : 'add_lift', { roomId: host.id });
+      notes.push(`${kind} added${lobby ? ` beside ${lobby.name}` : ''}`);
     } catch (err) {
       throw new ModelError(`No room for the ${kind} in ${host.name}: ${err instanceof Error ? err.message : err}`);
     }

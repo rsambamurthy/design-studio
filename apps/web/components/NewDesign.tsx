@@ -37,7 +37,8 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
   const [error, setError] = useState('');
   const [bedrooms, setBedrooms] = useState(0); // 0 = decide from the plinth
   const [toilets, setToilets] = useState(0); // 0 = as the layout comes
-  const [core, setCore] = useState<'' | 'both' | 'stair' | 'none'>(''); // '' = as the layout comes
+  const [floors, setFloors] = useState(1); // 1 = ground only
+  const [lift, setLift] = useState(false); // optional, only with more than one floor
 
   function len(label: string, v: string, allowEmpty = false): string | null {
     const t = v.trim();
@@ -72,7 +73,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
       return siteOps;
   }
 
-  const counts = () => (template === 'shell' ? {} : { ...(template === 'auto' && bedrooms ? { bedrooms } : {}), ...(toilets ? { toilets } : {}), ...(core ? { core } : {}) });
+  const counts = () => ({ ...(template !== 'shell' && template === 'auto' && bedrooms ? { bedrooms } : {}), ...(template !== 'shell' && toilets ? { toilets } : {}), floors, lift: floors > 1 && lift });
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -115,7 +116,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
     } catch {
       return null;
     }
-  }, [withPlot, ew, ns, setbacks, access, trees, template, bedrooms, toilets, core]);
+  }, [withPlot, ew, ns, setbacks, access, trees, template, bedrooms, toilets, floors, lift]);
 
   const tplSize = (id: string) => {
     const r = buildingOuterRect(models[id]!);
@@ -155,8 +156,34 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
         {TEMPLATES.filter((t) => t.id !== 'shell').map((t) => card(t))}
       </div>
 
+      <div className="nd-rooms">
+        <div>
+          <div className="nd-label">Floors</div>
+          <div className="chips" role="radiogroup" aria-label="Floors">
+            {[1, 2, 3, 4].map((n) => (
+              <button type="button" key={n} role="radio" aria-checked={floors === n} className={`chip ${floors === n ? 'on' : ''}`} onClick={() => setFloors(n)}>
+                {n === 1 ? 'Ground only' : `G + ${n - 1}`}
+              </button>
+            ))}
+          </div>
+        </div>
+        {floors > 1 && (
+          <div>
+            <div className="nd-label">Lift (optional)</div>
+            <div className="chips" role="radiogroup" aria-label="Lift">
+              {[false, true].map((v) => (
+                <button type="button" key={String(v)} role="radio" aria-checked={lift === v} className={`chip ${lift === v ? 'on' : ''}`} onClick={() => setLift(v)}>
+                  {v ? 'Add a lift' : 'No lift'}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <p className="nd-hint">{floors > 1 ? 'More than one floor brings a staircase. The stair and lift are their own walled units; when there is a lobby they open into it, and you can move each of them.' : 'Ground only: no staircase or lift.'}</p>
+      </div>
+
       {template === 'shell' ? (
-        <p className="nd-hint shell-hint">You&apos;ll get the outer walls sized to your plinth. Then drag bedrooms, bathrooms, kitchen, lobby, stairs and lift into it and set each one&apos;s size.</p>
+        <p className="nd-hint shell-hint">You&apos;ll get the outer walls sized to your plinth. Then drag bedrooms, bathrooms, kitchen and the rest into it and set each one&apos;s size, or use Lay out the rooms.</p>
       ) : (
       <div className="nd-rooms">
         <div>
@@ -184,17 +211,7 @@ export default function NewDesign({ onCreate, busy }: { onCreate: (body: Record<
             ))}
           </div>
         </div>
-        <div>
-          <div className="nd-label">Stair &amp; lift</div>
-          <div className="chips" role="radiogroup" aria-label="Stair and lift">
-            {([['', 'Standard'], ['both', 'Stair + lift'], ['stair', 'Stair only'], ['none', 'None']] as const).map(([v, label]) => (
-              <button type="button" key={label} role="radio" aria-checked={core === v} className={`chip ${core === v ? 'on' : ''}`} onClick={() => setCore(v)}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <p className="nd-hint">The stair and lift are walled units you can drag anywhere afterwards. Extra toilets are attached to bedrooms (largest first), then a common toilet off the living area. Fewer turns the common toilet into a store.</p>
+        <p className="nd-hint">Extra toilets are attached to bedrooms (largest first), then a common toilet off the living area. Fewer turns the common toilet into a store.</p>
       </div>
       )}
 

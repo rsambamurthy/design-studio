@@ -40,7 +40,7 @@ export interface LayoutZone {
 export interface LayoutPlan {
   rooms: LayoutRoom[];
   zones: LayoutZone[];
-  /** Zone the main door opens into, and which outer side it is on. */
+  /** Zone of the living area the main door opens into, and which outer side it is on. */
   entrance?: { zone: string; side: 'top' | 'bottom' | 'left' | 'right'; x0?: number; y0?: number; x1?: number; y1?: number };
 }
 
@@ -180,7 +180,7 @@ export const SCHEMES: Scheme[] = [
       const side: Part[] = [];
       if (p.pooja) side.push(fixed(5.5, room('Pooja', 'pooja', 'Foyer')));
       for (let i = 0; i < p.stores; i++) side.push(fixed(5, room(i ? `Store ${i + 1}` : 'Store', 'other', 'Foyer')));
-      side.push(flex(zone('Entrance')));
+      side.push(flex(zone('Foyer')));
       const middle = X(
         flex(Y(fixed(5, X(fixed(9, room('Toilet 2', 'toilet', 'Bed 2')), flex(zone('Living')))), flex(zone('Living'))), 1.25, 13),
         flex(zone('Foyer'), 0.55, 5.5),
@@ -323,7 +323,8 @@ export function planScheme(model: BuildingModel, scheme: Scheme, input: SchemeIn
     const t = touches.find((x) => x.len > 1500);
     return t ? { zone: z.name, side: t.side, x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1 } : undefined;
   };
-  for (const name of ['Entrance', 'Foyer', 'Living', 'Dining']) {
+  // The main door always opens into the living area (its foyer counts), never into a room.
+  for (const name of ['Living', 'Foyer', 'Entrance']) {
     const e = out.zones.filter((z) => z.name === name).map(sideOf).find(Boolean);
     if (e) {
       out.entrance = e;
