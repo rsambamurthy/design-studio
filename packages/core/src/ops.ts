@@ -74,13 +74,14 @@ export const OperationSchemas = {
       items: z
         .array(
           z.object({
-            type: z.enum(['count', 'outer_wall', 'window', 'attached_toilet', 'zone', 'min_size', 'next_to']),
+            type: z.enum(['count', 'outer_wall', 'window', 'attached_toilet', 'zone', 'min_size', 'next_to', 'service_entry']),
             rooms: z.string().describe('"bedrooms", "toilets", "wet rooms", "habitable", a room kind like "kitchen" or "pooja", or a room name'),
             zone: z.enum(['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'centre']).optional(),
             width: z.string().optional(),
             depth: z.string().optional(),
             other: z.string().optional().describe('For next_to: the other room(s)'),
             n: z.number().int().min(1).max(12).optional().describe('For count: how many rooms of this kind the plan needs'),
+            entry: z.enum(['kitchen', 'outside']).optional().describe('For service_entry: service area entered from the kitchen only, or also its own outside door'),
           }),
         )
         .max(30),
@@ -93,6 +94,7 @@ export const OperationSchemas = {
         .max(40),
       zones: z.array(z.object({ name: z.string(), x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number() })).max(40),
       entrance: z.object({ zone: z.string(), side: z.enum(['top', 'bottom', 'left', 'right']), x0: z.number().optional(), y0: z.number().optional(), x1: z.number().optional(), y1: z.number().optional() }).optional(),
+      serviceDoor: z.boolean().optional().describe('Give the service area its own door from outside'),
     })
     .describe('Replace every room block with a complete layout (wall centre-line rectangles, door targets, open zones). Used by layout options; prefer smaller edits in conversation.'),
   set_structure: z

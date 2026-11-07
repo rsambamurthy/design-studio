@@ -106,7 +106,7 @@ export const fixObjective: Objective = {
 export const BRIEF_OPS: OperationName[] = [...FIX_OPS, 'add_opening', 'add_toilet', 'swap_rooms', 'add_room'];
 
 /** Placement first (where rooms go), then what they need (toilets, windows). */
-const BRIEF_ORDER = ['count', 'zone', 'outer_wall', 'min_size', 'next_to', 'attached_toilet', 'count-toilet', 'window'];
+const BRIEF_ORDER = ['count', 'zone', 'outer_wall', 'min_size', 'next_to', 'attached_toilet', 'count-toilet', 'window', 'service_entry'];
 // Rooms with a fixed place (kitchen, pooja) before the bedrooms take the corners.
 const COUNT_ORDER: Room['kind'][] = ['kitchen', 'pooja', 'bedroom', 'other', 'lobby', 'service', 'balcony', 'dining'];
 

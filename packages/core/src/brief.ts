@@ -27,6 +27,7 @@ export const BriefItemSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('zone'), rooms, zone: z.enum(ZONES) }),
   z.object({ type: z.literal('min_size'), rooms, width: z.string(), depth: z.string() }),
   z.object({ type: z.literal('next_to'), rooms, other: z.string().min(1) }),
+  z.object({ type: z.literal('service_entry'), rooms, entry: z.enum(['kitchen', 'outside']) }),
 ]);
 export type BriefItem = z.infer<typeof BriefItemSchema>;
 
@@ -113,6 +114,8 @@ export function briefLabel(item: BriefItem): string {
       return `${who} at least ${item.width} × ${item.depth}`;
     case 'next_to':
       return `${who} next to ${item.other}`;
+    case 'service_entry':
+      return item.entry === 'outside' ? 'Service area with its own outside door' : 'Service area entered from the kitchen';
   }
 }
 
@@ -172,6 +175,14 @@ export function checkBrief(model: BuildingModel, brief: Brief | undefined = read
           if (!ok) why = `${r.name} is ${formatLength(w, u)} × ${formatLength(h, u)}`;
           break;
         }
+        case 'service_entry': {
+          const kitchen = model.rooms.find((k) => k.kind === 'kitchen');
+          const fromKitchen = !!kitchen && touches(model, r, kitchen) && doorBetweenRooms(model, r, kitchen);
+          const outside = (['top', 'bottom', 'left', 'right'] as const).some((s) => (r.block ? fixedWallUnder(model, r, s)?.kind === 'external' : false) && roomOpeningsOn(model, r, s).some((o) => o.kind === 'door' && model.walls.find((w) => w.id === o.wallId)?.kind === 'external'));
+          if (!fromKitchen) why = `${r.name} has no door from the kitchen`;
+          else if (item.entry === 'outside' && !outside) why = `${r.name} has no door from outside`;
+          break;
+        }
         case 'next_to': {
           const others = selectRooms(model, item.other).filter((o) => o.id !== r.id);
           if (others.length && !others.some((o) => touches(model, r, o))) why = `${r.name} doesn't share a wall with ${others.map((o) => o.name).join(' or ')}`;
@@ -188,4 +199,12 @@ export function checkBrief(model: BuildingModel, brief: Brief | undefined = read
 export function readBrief(model: BuildingModel): Brief | undefined {
   const r = BriefSchema.safeParse(model.brief ?? { items: [] });
   return r.success && r.data.items.length ? r.data : undefined;
+}
+
+/** A door in the wall the two rooms share. */
+function doorBetweenRooms(model: BuildingModel, a: Room, b: Room): boolean {
+  return (['top', 'bottom', 'left', 'right'] as const).some((s) => {
+    const shared = a.block && b.block ? coincidentSides(model, a, s).some((c) => c.room.id === b.id) : false;
+    return shared && roomOpeningsOn(model, a, s).some((o) => o.kind === 'door' || o.kind === 'opening');
+  });
 }

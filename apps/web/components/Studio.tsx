@@ -769,6 +769,11 @@ export default function Studio({ email, initial }: { email: string; initial: Des
                       <span className="option-stats">
                         Brief {metN}/{tot} · {o.score.errors} error{o.score.errors === 1 ? '' : 's'} · {o.score.warnings} warning{o.score.warnings === 1 ? '' : 's'} · {sq.toLocaleString('en-IN')} sq ft living
                       </span>
+                      {res.some((r) => !r.met && !r.empty) && (
+                        <span className="option-misses">
+                          Misses: {res.filter((r) => !r.met && !r.empty).map((r) => `${r.label}${r.failing[0] ? ` (${r.failing[0].why})` : ''}`).join('; ')}
+                        </span>
+                      )}
                       <span className="compare-btns">
                         <button type="button" className="btn-secondary btn-sm" onClick={() => { setPreview(i); setCompareOpts(false); }}>See full size</button>
                         <button type="button" className="btn-primary btn-sm" disabled={busy} onClick={() => void useOption(o)}>Use this option</button>
@@ -1230,7 +1235,7 @@ function AgentPanel({ run, busy, onAction }: { run: AgentRunView; busy: boolean;
   );
 }
 
-type BriefItemInput = { type: string; rooms: string; zone?: string; width?: string; depth?: string; other?: string; n?: number };
+type BriefItemInput = { type: string; rooms: string; zone?: string; width?: string; depth?: string; other?: string; n?: number; entry?: string };
 
 const ZONE_NAMES = ['north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'centre'];
 
@@ -1276,6 +1281,7 @@ function BriefPanel({
   const [kitchens, setKitchens] = useState(countOf('kitchen'));
   const [poojas, setPoojas] = useState(countOf('pooja'));
   const [stores, setStores] = useState(countOf('store'));
+  const [serviceEntry, setServiceEntry] = useState((saved.find((i) => i.type === 'service_entry')?.entry as string | undefined) ?? '');
   const minItem = has('min_size', 'bedrooms');
   const [minOn, setMinOn] = useState(!!minItem);
   const [minW, setMinW] = useState(minItem?.width ?? "10'");
@@ -1291,6 +1297,7 @@ function BriefPanel({
     setAttached(true);
     setKitchen('south-east');
     setPooja('north-east');
+    if (!serviceEntry) setServiceEntry('kitchen');
   };
   const items: BriefItemInput[] = [
     ...(beds ? [{ type: 'count', rooms: 'bedrooms', n: beds }] : []),
@@ -1305,6 +1312,7 @@ function BriefPanel({
     ...(kitchen ? [{ type: 'zone', rooms: 'kitchen', zone: kitchen }] : []),
     ...(pooja ? [{ type: 'zone', rooms: 'pooja', zone: pooja }] : []),
     ...(minOn ? [{ type: 'min_size', rooms: 'bedrooms', width: minW, depth: minD }] : []),
+    ...(serviceEntry ? [{ type: 'service_entry', rooms: 'service', entry: serviceEntry }] : []),
   ];
   const canon = (list: BriefItemInput[]) =>
     list
@@ -1358,6 +1366,14 @@ function BriefPanel({
           <input value={minW} onChange={(e) => setMinW(e.target.value)} disabled={!minOn} aria-label="Minimum bedroom width" /> ×
           <input value={minD} onChange={(e) => setMinD(e.target.value)} disabled={!minOn} aria-label="Minimum bedroom depth" />
         </label>
+      </div>
+      <div className="brief-sub">Service area entrance</div>
+      <div className="chips" role="radiogroup" aria-label="Service area entrance">
+        {([['', 'Not set'], ['kitchen', 'From the kitchen'], ['outside', 'Separate outside door']] as const).map(([v, label]) => (
+          <button type="button" key={label} role="radio" aria-checked={serviceEntry === v} className={`chip ${serviceEntry === v ? 'on' : ''}`} onClick={() => setServiceEntry(v)}>
+            {label}
+          </button>
+        ))}
       </div>
       <div className="brief-btns">
         <button type="button" className="btn-secondary btn-sm" disabled={busy || running || !dirty} onClick={() => onSave(items)}>

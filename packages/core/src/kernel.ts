@@ -738,7 +738,9 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
         const room = made.get(lr.name)!;
         const width = lr.kind === 'toilet' ? 750 : lr.kind === 'pooja' || lr.kind === 'other' ? 760 : lr.kind === 'service' ? 760 : 900;
         let placed = false;
-        for (const t of rectOf(lr.door)) {
+        // The named target first; failing that any open zone it touches, so no room is left without a way in.
+        const targets = [...rectOf(lr.door), ...args.zones.filter((z) => z.name !== lr.door)];
+        for (const t of targets) {
           const sides: { side: PlanSide4; s0: number; s1: number }[] = [];
           const ox = [Math.max(lr.x0, t.x0), Math.min(lr.x1, t.x1)] as const;
           const oy = [Math.max(lr.y0, t.y0), Math.min(lr.y1, t.y1)] as const;
@@ -760,7 +762,7 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
           placed = true;
           break;
         }
-        if (!placed) ctx.note(`${lr.name} has no wall long enough onto ${lr.door} for a door.`);
+        if (!placed) ctx.note(`${lr.name} has no wall long enough onto ${lr.door} or the open area for a door.`);
       }
       // Windows on outer walls: bedrooms, kitchens, toilets (ventilators) and the open zones.
       const ext = model.walls.filter((w) => w.kind === 'external');
@@ -786,6 +788,27 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
         if (width) windowsFor(lr, `${lr.name} ${lr.kind === 'toilet' ? 'ventilator' : 'window'}`, width);
       }
       for (const z of args.zones) if (/living|dining|hall/i.test(z.name) && Math.min(z.x1 - z.x0, z.y1 - z.y0) > 2400) windowsFor(z, `${z.name} window`, 1800);
+      // Service area: its own door from outside when the brief asks for it.
+      if (args.serviceDoor) {
+        for (const lr of args.rooms.filter((r) => r.kind === 'service')) {
+          const room = made.get(lr.name)!;
+          for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+            const wall = fixedWallUnder(model, room, side);
+            if (wall?.kind !== 'external') continue;
+            const h = side === 'top' || side === 'bottom';
+            const span = h ? lr.x1 - lr.x0 : lr.y1 - lr.y0;
+            if (span < 1300) continue;
+            const a = h ? wall.a.x : wall.a.y;
+            const dir = Math.sign((h ? wall.b.x : wall.b.y) - a) || 1;
+            const centre = h ? (lr.x0 + lr.x1) / 2 : (lr.y0 + lr.y1) / 2;
+            model.openings = model.openings.filter((o) => !(o.wallId === wall.id && Math.abs(o.offset - (centre - a) * dir) < 1200));
+            const o: Opening = { id: ctx.newId('door'), label: 'Service door', wallId: wall.id, kind: 'door', offset: Math.round((centre - a) * dir), width: 900, height: 2100, swingSide: 'left', hinge: 'start' };
+            model.openings.push(o);
+            setSwingInto(model, o, room);
+            break;
+          }
+        }
+      }
       // Main door from outside into the entrance zone.
       if (args.entrance) {
         const en = args.entrance;

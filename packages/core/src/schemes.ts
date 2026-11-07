@@ -12,6 +12,7 @@
  */
 import type { Rect } from './geometry';
 import type { BuildingModel, Room } from './model';
+import { parseLength } from './units';
 
 const FT = 304.8;
 const WALL = 115;
@@ -40,6 +41,8 @@ export interface LayoutZone {
 export interface LayoutPlan {
   rooms: LayoutRoom[];
   zones: LayoutZone[];
+  /** Give the service area its own outside door. */
+  serviceDoor?: boolean;
   /** Zone of the living area the main door opens into, and which outer side it is on. */
   entrance?: { zone: string; side: 'top' | 'bottom' | 'left' | 'right'; x0?: number; y0?: number; x1?: number; y1?: number };
 }
@@ -145,6 +148,10 @@ export interface SchemeInput {
   toilets: number;
   pooja: boolean;
   stores: number;
+  /** Smallest bedroom side the brief asks for (clear feet). */
+  bedMin?: number;
+  /** Service area entered from the kitchen only, or also by its own outside door. */
+  serviceEntry?: 'kitchen' | 'outside';
 }
 
 export interface Scheme {
@@ -158,6 +165,10 @@ export interface Scheme {
  * A bedroom with its toilet beside it, sharing the band's depth: the toilet
  * takes the top of a narrow column and the passage the rest.
  */
+/** A bedroom side: the scheme's own minimum, or the brief's minimum if larger. */
+// (A little over, since a room against a 9" outer wall loses more to the wall than one between partitions.)
+const bm = (p: SchemeInput, own: number) => Math.max(own, p.bedMin ? p.bedMin + 0.3 : 0);
+
 const bedName = (i: number) => (i === 0 ? 'Master Bed' : `Bed ${i + 1}`);
 
 export const SCHEMES: Scheme[] = [
@@ -171,10 +182,10 @@ export const SCHEMES: Scheme[] = [
       const wide = w > c(46);
       // Back band: Bed 2 | toilet over a short passage | Master (| toilet | Bed 4 on wide plots).
       const back = X(
-        flex(room('Bed 2', 'bedroom', 'Passage'), 1, 11, 15),
+        flex(room('Bed 2', 'bedroom', 'Passage'), 1, bm(p, 11), Math.max(15, bm(p, 11))),
         fixed(5, Y(fixed(9, room('Toilet 1', 'toilet', 'Master Bed')), flex(zone('Passage')))),
-        flex(room('Master Bed', 'bedroom', 'Passage'), 1.12, 12, 17),
-        ...(n >= 4 && wide ? [fixed(5, Y(fixed(9, room('Toilet 4', 'toilet', 'Bed 4')), flex(zone('Passage')))), flex(room('Bed 4', 'bedroom', 'Passage'), 1, 11)] : []),
+        flex(room('Master Bed', 'bedroom', 'Passage'), 1.12, bm(p, 12), Math.max(17, bm(p, 12))),
+        ...(n >= 4 && wide ? [fixed(5, Y(fixed(9, room('Toilet 4', 'toilet', 'Bed 4')), flex(zone('Passage')))), flex(room('Bed 4', 'bedroom', 'Passage'), 1, bm(p, 11))] : []),
       );
       // Middle: Bed 2's toilet over the living room, the foyer, then pooja / store / Bed 4 by the entrance.
       const side: Part[] = [];
@@ -189,14 +200,14 @@ export const SCHEMES: Scheme[] = [
       // Front: kitchen over service in one column; dining with Bed 3, its toilet and the common toilet in front.
       const frontRow: Part[] = [spare(zone('Dining'))];
       if (extraToilets > 0) frontRow.push(fixed(4.5, room(`Toilet ${n + (n >= 4 && !wide ? 0 : 1)}`, 'toilet', 'Dining')));
-      if (n >= 3) frontRow.push(fixed(5, room('Toilet 3', 'toilet', 'Bed 3')), flex(room('Bed 3', 'bedroom', 'Dining'), 1, 10, 15));
-      if (n >= 4 && !wide) frontRow.push(fixed(5, room('Toilet 4', 'toilet', 'Bed 4')), flex(room('Bed 4', 'bedroom', 'Dining'), 1, 10, 15));
+      if (n >= 3) frontRow.push(fixed(5, room('Toilet 3', 'toilet', 'Bed 3')), flex(room('Bed 3', 'bedroom', 'Dining'), 1, bm(p, 10), Math.max(15, bm(p, 10))));
+      if (n >= 4 && !wide) frontRow.push(fixed(5, room('Toilet 4', 'toilet', 'Bed 4')), flex(room('Bed 4', 'bedroom', 'Dining'), 1, bm(p, 10), Math.max(15, bm(p, 10))));
       if (n < 3) frontRow.push(flex(zone('Dining')));
       const front = X(
         fixed(11.5, Y(flex(room('Kitchen', 'kitchen', 'Dining'), 1, 11, 14), fixed(5, room('Service', 'service', 'Kitchen')))),
-        flex(Y(flex(zone('Dining'), 1, 7), fixed(10, X(...frontRow)))),
+        flex(Y(flex(zone('Dining'), 1, 7), fixed(n >= 3 ? bm(p, 10) : 10, X(...frontRow)))),
       );
-      return Y(fixed(14, back), flex(middle, 1, 13), fixed(18, front));
+      return Y(fixed(Math.max(14, bm(p, 0)), back), flex(middle, 1, 13), fixed(Math.max(18, 8 + (n >= 3 ? bm(p, 10) : 10)), front));
     },
   },
   {
@@ -210,7 +221,7 @@ export const SCHEMES: Scheme[] = [
       for (let i = 0; i < n; i++) {
         const name = bedName(i);
         const toilet = room(`Toilet ${i + 1}`, 'toilet', name);
-        beds.push(fixed(i === 0 ? 18 : 17, Y(fixed(5, X(fixed(8, toilet), flex(zone('Passage')))), flex(room(name, 'bedroom', 'Passage')))));
+        beds.push(fixed(5 + Math.max(i === 0 ? 13 : 12, bm(p, 0)), Y(fixed(5, X(fixed(8, toilet), flex(zone('Passage')))), flex(room(name, 'bedroom', 'Passage')))));
       }
       beds.push(flex(zone('Foyer')));
       const extra = Math.max(0, p.toilets - n);
@@ -224,7 +235,7 @@ export const SCHEMES: Scheme[] = [
         flex(X(flex(zone('Dining')), fixed(6, Y(...small))), 0.8, 12),
         flex(zone('Living'), 1.2, 12),
       );
-      return X(fixed(13, Y(...beds)), flex(pub, 1, 16));
+      return X(fixed(Math.max(13, bm(p, 0)), Y(...beds)), flex(pub, 1, 16));
     },
   },
   {
@@ -234,16 +245,17 @@ export const SCHEMES: Scheme[] = [
     build: (_w, _d, p) => {
       const n = p.bedrooms;
       const extra = Math.max(0, p.toilets - n);
-      const narrow = _w < c((n - 1) * 16.5 + 8);
+      const narrow = _w < c((n - 1) * (Math.max(10.5, bm(p, 0)) + 5.5) + 8);
       const smallRooms: Part[] = [];
-      if (p.pooja) smallRooms.push(fixed(5.5, room('Pooja', 'pooja', narrow ? 'Dining' : 'Foyer')));
+      // The common toilet first, so on the narrow plan it sits against the back wall.
       if (extra) smallRooms.push(fixed(5, room(`Toilet ${n + 1}`, 'toilet', narrow ? 'Dining' : 'Foyer')));
+      if (p.pooja) smallRooms.push(fixed(5.5, room('Pooja', 'pooja', narrow ? 'Dining' : 'Foyer')));
       for (let k = 0; k < p.stores; k++) smallRooms.push(fixed(5, room(k ? `Store ${k + 1}` : 'Store', 'other', narrow ? 'Dining' : 'Foyer')));
       const backRow = X(
-        flex(room('Master Bed', 'bedroom', 'Passage'), 1.2, 12, 17),
+        flex(room('Master Bed', 'bedroom', 'Passage'), 1.2, bm(p, 12), Math.max(17, bm(p, 12))),
         fixed(5, Y(fixed(8, room('Toilet 1', 'toilet', 'Master Bed')), flex(zone('Passage')))),
         ...(narrow && smallRooms.length ? [fixed(5.5, Y(...smallRooms, flex(zone('Dining'))))] : [flex(zone('Dining'), 0.3, 0)]),
-        fixed(11.5, Y(flex(room('Kitchen', 'kitchen', 'Dining'), 1, 9, 14), fixed(4.5, room('Service', 'service', 'Kitchen')))),
+        fixed(11.5, Y(fixed(4.5, room('Service', 'service', 'Kitchen')), flex(room('Kitchen', 'kitchen', 'Dining'), 1, 9, 14))),
       );
       const fronts: Part[] = [];
       for (let i = 1; i < n; i++) {
@@ -252,17 +264,17 @@ export const SCHEMES: Scheme[] = [
           fronts.push(flex(X(flex(zone('Foyer'), 1, 6), ...(small.length ? [fixed(6, Y(...small, flex(zone('Foyer'))))] : [])), 0.9, 7));
         }
         if (narrow) {
-          // Narrow plot: the toilet sits over its bedroom, entered from it, with living space beside it.
+          // Narrow plot: the toilet sits at the front wall below its bedroom (ventilator outside), entered from it.
           const bed = `Bed ${i + 1}`;
           const t = room(`Toilet ${i + 1}`, 'toilet', bed);
-          fronts.push(flex(Y(fixed(5, i % 2 ? X(flex(zone('Living')), fixed(8, t)) : X(fixed(8, t), flex(zone('Living')))), flex(room(bed, 'bedroom', 'Living'), 1, 10)), 1, 11));
+          fronts.push(flex(Y(flex(room(bed, 'bedroom', 'Living'), 1, bm(p, 10)), fixed(5, i % 2 ? X(flex(zone('Foyer')), fixed(8, t)) : X(fixed(8, t), flex(zone('Foyer'))))), 1, bm(p, 11)));
         } else {
-          fronts.push(flex(room(`Bed ${i + 1}`, 'bedroom', 'Living'), 1, 10.5, 15));
+          fronts.push(flex(room(`Bed ${i + 1}`, 'bedroom', 'Living'), 1, bm(p, 10.5), Math.max(15, bm(p, 10.5))));
           fronts.push(fixed(5, Y(fixed(3.5, zone('Living')), flex(room(`Toilet ${i + 1}`, 'toilet', `Bed ${i + 1}`)))));
         }
       }
       if (n === 1) fronts.push(flex(zone('Foyer')));
-      return Y(fixed(14, backRow), flex(zone('Dining'), 0.8, 9), flex(zone('Living'), 1, 11), fixed(narrow ? 18 : 12.5, X(...fronts)));
+      return Y(fixed(Math.max(14, bm(p, 0)), backRow), flex(zone('Dining'), 0.8, 9), flex(zone('Living'), 1, 11), fixed(narrow ? 5 + Math.max(12.5, bm(p, 0)) : Math.max(12.5, bm(p, 0)), X(...fronts)));
     },
   },
 ];
@@ -295,7 +307,7 @@ export function shellRect(model: BuildingModel): Rect | undefined {
 export function planScheme(model: BuildingModel, scheme: Scheme, input: SchemeInput, flip: { x?: boolean; y?: boolean } = {}): LayoutPlan {
   const r = shellRect(model);
   if (!r) throw new Error('The design has no outer walls to lay out in.');
-  const out: LayoutPlan = { rooms: [], zones: [] };
+  const out: LayoutPlan = { rooms: [], zones: [], ...(input.serviceEntry === 'outside' ? { serviceDoor: true } : {}) };
   // Schemes are drawn for plots deeper than wide; on a wide plot the scheme turns so its front faces a long side.
   const turn = r.x1 - r.x0 > (r.y1 - r.y0) * 1.1;
   if (turn) {
@@ -342,10 +354,23 @@ export function schemeInput(model: BuildingModel): SchemeInput {
     return it ? Number(it.n) : Math.max(fallback, model.rooms.filter((r) => kinds.includes(r.kind)).length);
   };
   const bedrooms = Math.min(4, Math.max(1, count('bedroom', ['bedroom'], 3)));
+  const min = items.find((i) => i.type === 'min_size' && /bed/i.test(i.rooms)) as { width?: string; depth?: string } | undefined;
+  const ft = (v?: string) => {
+    if (!v) return 0;
+    try {
+      return parseLength(v).mm / FT;
+    } catch {
+      return 0;
+    }
+  };
+  const bedMin = min ? Math.max(ft(min.width), ft(min.depth)) : 0;
+  const se = items.find((i) => i.type === 'service_entry') as { entry?: string } | undefined;
   return {
     bedrooms,
     toilets: count('toilet', ['toilet'], bedrooms),
     pooja: count('pooja', ['pooja'], 0) > 0,
     stores: Math.min(2, count('store', [], 0)),
+    ...(bedMin ? { bedMin } : {}),
+    serviceEntry: se?.entry === 'outside' ? 'outside' : 'kitchen',
   };
 }
