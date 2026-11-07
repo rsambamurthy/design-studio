@@ -289,32 +289,10 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, on
 
       {/* Walls */}
       {model.walls.map((wl) => (
-        <g key={wl.id} data-id={wl.id} transform={shift(wl.id)} className={onEdit ? 'drag' : undefined} onPointerDown={(e) => dragWall(e, wl.id)}>
+        <g key={wl.id} data-id={wl.id} transform={shift(wl.id)} className={onEdit ? `drag wall-grab ${Math.abs(wl.a.y - wl.b.y) < 1 ? 'wall-h' : 'wall-v'}` : undefined} onPointerDown={(e) => dragWall(e, wl.id)}>
           <title>{onEdit ? 'Drag to move this wall' : undefined}</title>
           <line x1={wl.a.x} y1={wl.a.y} x2={wl.b.x} y2={wl.b.y} strokeWidth={wl.thickness} strokeLinecap="square" className={`wall ${changedIds.has(wl.id) || preview?.id === wl.id ? 'hot' : ''}`} />
-          {onEdit && <line x1={wl.a.x} y1={wl.a.y} x2={wl.b.x} y2={wl.b.y} strokeWidth={Math.max(wl.thickness, 360)} className="hit" />}
-        </g>
-      ))}
-
-      {/* Room block walls (each block's own walls; drag one to resize the room) */}
-      {blockWallRects(model).map(({ id, rect }) => (
-        <g key={id} data-id={id} transform={shift(id)} className={onEdit ? 'drag' : undefined} onPointerDown={(e) => dragWall(e, id)}>
-          <title>{onEdit ? 'Drag to resize this room' : undefined}</title>
-          <rect x={rect.x0} y={rect.y0} width={rect.x1 - rect.x0} height={rect.y1 - rect.y0} className={`block-wall ${changedIds.has(id) || preview?.id === id ? 'hot' : ''}`} />
-          {onEdit && (() => {
-            const horizontal = rect.x1 - rect.x0 > rect.y1 - rect.y0;
-            const pad = 120;
-            return horizontal
-              ? <rect x={rect.x0} y={rect.y0 - pad} width={rect.x1 - rect.x0} height={rect.y1 - rect.y0 + 2 * pad} className="hit" />
-              : <rect x={rect.x0 - pad} y={rect.y0} width={rect.x1 - rect.x0 + 2 * pad} height={rect.y1 - rect.y0} className="hit" />;
-          })()}
-        </g>
-      ))}
-
-      {/* Openings */}
-      {model.openings.map((o) => (
-        <g key={o.id} data-id={o.id} transform={shift(o.id)} className={onEdit ? 'drag' : undefined} onPointerDown={(e) => dragOpening(e, o)}>
-          <OpeningShape model={model} o={o} hot={changedIds.has(o.id) || preview?.id === o.id} hit={!!onEdit} />
+          {onEdit && <line x1={wl.a.x} y1={wl.a.y} x2={wl.b.x} y2={wl.b.y} strokeWidth={Math.max(wl.thickness + 500, 600)} className="hit" />}
         </g>
       ))}
 
@@ -345,6 +323,30 @@ function PlanContent({ model, changedIds, issues, onEdit, bounds, selectedId, on
           }
         >
           <FurnitureShape f={f} hot={changedIds.has(f.id) || preview?.id === f.id} />
+        </g>
+      ))}
+
+      {/* Room block walls (each block's own walls; drag one to resize the room). Drawn over the
+          furniture so that pointing at a wall beside a fixture grabs the wall. Then doors and windows. */}
+      {blockWallRects(model).map(({ id, rect }) => (
+        <g key={id} data-id={id} transform={shift(id)} className={onEdit ? `drag wall-grab ${rect.x1 - rect.x0 > rect.y1 - rect.y0 ? 'wall-h' : 'wall-v'}` : undefined} onPointerDown={(e) => dragWall(e, id)}>
+          <title>{onEdit ? 'Drag to resize this room' : undefined}</title>
+          <rect x={rect.x0} y={rect.y0} width={rect.x1 - rect.x0} height={rect.y1 - rect.y0} className={`block-wall ${changedIds.has(id) || preview?.id === id ? 'hot' : ''}`} />
+          {onEdit && (() => {
+            const horizontal = rect.x1 - rect.x0 > rect.y1 - rect.y0;
+            // A generous grab band either side of the wall, so pointing near it moves the wall, not the view.
+            const pad = 200;
+            return horizontal
+              ? <rect x={rect.x0} y={rect.y0 - pad} width={rect.x1 - rect.x0} height={rect.y1 - rect.y0 + 2 * pad} className="hit" />
+              : <rect x={rect.x0 - pad} y={rect.y0} width={rect.x1 - rect.x0 + 2 * pad} height={rect.y1 - rect.y0} className="hit" />;
+          })()}
+        </g>
+      ))}
+
+      {/* Openings */}
+      {model.openings.map((o) => (
+        <g key={o.id} data-id={o.id} transform={shift(o.id)} className={onEdit ? 'drag' : undefined} onPointerDown={(e) => dragOpening(e, o)}>
+          <OpeningShape model={model} o={o} hot={changedIds.has(o.id) || preview?.id === o.id} hit={!!onEdit} />
         </g>
       ))}
 
