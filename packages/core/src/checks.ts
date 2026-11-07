@@ -399,6 +399,33 @@ function entranceChecks(model: BuildingModel): Issue[] {
       }
     }
   }
+  // A pooja is entered from the living area (or the kitchen), not from a bedroom, toilet or passage.
+  for (const pj of model.rooms.filter((r) => r.kind === 'pooja' && r.block)) {
+    const b = pj.block!;
+    const doors = model.openings.filter((o) => o.kind === 'door' || o.kind === 'opening').filter((o) => {
+      try {
+        const w = getWall(model, o.wallId);
+        const p = pointOnWall(w, o.offset);
+        return p.x >= b.x0 - 5 && p.x <= b.x1 + 5 && p.y >= b.y0 - 5 && p.y <= b.y1 + 5 && (Math.abs(p.x - b.x0) < 5 || Math.abs(p.x - b.x1) < 5 || Math.abs(p.y - b.y0) < 5 || Math.abs(p.y - b.y1) < 5);
+      } catch {
+        return false;
+      }
+    });
+    for (const o of doors) {
+      const w = getWall(model, o.wallId);
+      const p = pointOnWall(w, o.offset);
+      const h = Math.abs(w.a.y - w.b.y) < 1;
+      for (const d of [-1, 1]) {
+        const q = h ? { x: p.x, y: p.y + d * 300 } : { x: p.x + d * 300, y: p.y };
+        if (q.x > b.x0 && q.x < b.x1 && q.y > b.y0 && q.y < b.y1) continue; // the pooja side
+        const other = model.rooms.find((r) => r.block && r.id !== pj.id && q.x > r.block.x0 && q.x < r.block.x1 && q.y > r.block.y0 && q.y < r.block.y1);
+        const zone = (model.zones ?? []).find((z) => q.x > z.x0 && q.x < z.x1 && q.y > z.y0 && q.y < z.y1);
+        if ((other && other.kind !== 'kitchen') || (!other && zone && /passage/i.test(zone.name))) {
+          out.push({ code: 'pooja.entrance', severity: 'warning', message: `${pj.name} opens from ${other ? other.name : zone!.name}; a pooja should open from the living area (or the kitchen).`, entityIds: [pj.id, o.id], at: q });
+        }
+      }
+    }
+  }
   const floors = model.structure?.floors ?? ((model.cores ?? []).some((c) => c.kind === 'stair') ? 2 : 1);
   for (const c of model.cores ?? []) {
     if (c.kind === 'lift' && floors <= 1) out.push({ code: 'core.lift-single-floor', severity: 'advisory', message: `${c.label} in a single-floor design: a lift is only needed when there is more than one floor.`, entityIds: [c.id], at: c.at });

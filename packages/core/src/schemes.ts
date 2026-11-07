@@ -189,7 +189,7 @@ export const SCHEMES: Scheme[] = [
       );
       // Middle: Bed 2's toilet over the living room, the foyer, then pooja / store / Bed 4 by the entrance.
       const side: Part[] = [];
-      if (p.pooja) side.push(fixed(5.5, room('Pooja', 'pooja', 'Foyer')));
+      if (p.pooja) side.push(fixed(5.5, room('Pooja', 'pooja', 'Living')));
       for (let i = 0; i < p.stores; i++) side.push(fixed(5, room(i ? `Store ${i + 1}` : 'Store', 'other', 'Foyer')));
       side.push(flex(zone('Foyer')));
       const middle = X(
@@ -226,7 +226,7 @@ export const SCHEMES: Scheme[] = [
       beds.push(flex(zone('Foyer')));
       const extra = Math.max(0, p.toilets - n);
       const small: Part[] = [];
-      if (p.pooja) small.push(fixed(5.5, room('Pooja', 'pooja', 'Dining')));
+      if (p.pooja) small.push(fixed(5.5, room('Pooja', 'pooja', 'Living')));
       if (extra) small.push(fixed(5.5, room(`Toilet ${n + 1}`, 'toilet', 'Dining')));
       for (let i = 0; i < p.stores; i++) small.push(fixed(5, room(i ? `Store ${i + 1}` : 'Store', 'other', 'Dining')));
       small.push(flex(zone('Dining')));
@@ -249,11 +249,12 @@ export const SCHEMES: Scheme[] = [
       const smallRooms: Part[] = [];
       // The common toilet first, so on the narrow plan it sits against the back wall.
       if (extra) smallRooms.push(fixed(5, room(`Toilet ${n + 1}`, 'toilet', narrow ? 'Dining' : 'Foyer')));
-      if (p.pooja) smallRooms.push(fixed(5.5, room('Pooja', 'pooja', narrow ? 'Dining' : 'Foyer')));
+      if (p.pooja) smallRooms.push(fixed(5.5, room('Pooja', 'pooja', 'Living')));
       for (let k = 0; k < p.stores; k++) smallRooms.push(fixed(5, room(k ? `Store ${k + 1}` : 'Store', 'other', narrow ? 'Dining' : 'Foyer')));
       const backRow = X(
-        flex(room('Master Bed', 'bedroom', 'Passage'), 1.2, bm(p, 12), Math.max(17, bm(p, 12))),
-        fixed(5, Y(fixed(8, room('Toilet 1', 'toilet', 'Master Bed')), flex(zone('Passage')))),
+        flex(room('Master Bed', 'bedroom', 'Dining'), 1.2, bm(p, 12), Math.max(17, bm(p, 12))),
+        // Toilet and the master's dress side by side in one column: no passage pocket left over.
+        fixed(5, Y(fixed(8, room('Toilet 1', 'toilet', 'Master Bed')), flex(room('Dress 1', 'other', 'Master Bed')))),
         ...(narrow && smallRooms.length ? [fixed(5.5, Y(...smallRooms, flex(zone('Dining'))))] : [flex(zone('Dining'), 0.3, 0)]),
         fixed(11.5, Y(fixed(4.5, room('Service', 'service', 'Kitchen')), flex(room('Kitchen', 'kitchen', 'Dining'), 1, 9, 14))),
       );
@@ -267,7 +268,9 @@ export const SCHEMES: Scheme[] = [
           // Narrow plot: the toilet sits at the front wall below its bedroom (ventilator outside), entered from it.
           const bed = `Bed ${i + 1}`;
           const t = room(`Toilet ${i + 1}`, 'toilet', bed);
-          fronts.push(flex(Y(flex(room(bed, 'bedroom', 'Living'), 1, bm(p, 10)), fixed(5, i % 2 ? X(flex(zone('Foyer')), fixed(8, t)) : X(fixed(8, t), flex(zone('Foyer'))))), 1, bm(p, 11)));
+          // The rest of the strip beside the toilet is the bedroom's dress / wardrobe, not left-over space.
+          const dress = room(`Dress ${i + 1}`, 'other', bed);
+          fronts.push(flex(Y(flex(room(bed, 'bedroom', 'Living'), 1, bm(p, 10)), fixed(5, i % 2 ? X(flex(dress), fixed(8, t)) : X(fixed(8, t), flex(dress)))), 1, bm(p, 11)));
         } else {
           fronts.push(flex(room(`Bed ${i + 1}`, 'bedroom', 'Living'), 1, bm(p, 10.5), Math.max(15, bm(p, 10.5))));
           fronts.push(fixed(5, Y(fixed(3.5, zone('Living')), flex(room(`Toilet ${i + 1}`, 'toilet', `Bed ${i + 1}`)))));
@@ -324,6 +327,7 @@ export function planScheme(model: BuildingModel, scheme: Scheme, input: SchemeIn
   });
   out.rooms = out.rooms.map(fl);
   out.zones = tidyZones(tidyZones(out.zones.map(fl)));
+  absorbDeadSpace(out);
   // Entrance: an entrance/foyer zone on an outer wall (the front first), else living or dining.
   const sideOf = (z: LayoutZone): LayoutPlan['entrance'] => {
     const touches: { side: 'top' | 'bottom' | 'left' | 'right'; len: number }[] = [
@@ -373,4 +377,73 @@ export function schemeInput(model: BuildingModel): SchemeInput {
     ...(bedMin ? { bedMin } : {}),
     serviceEntry: se?.entry === 'outside' ? 'outside' : 'kitchen',
   };
+}
+
+const touchLen = (a: Rect, b: Rect): number => {
+  const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+  const oy = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+  if ((Math.abs(a.x1 - b.x0) < 3 || Math.abs(b.x1 - a.x0) < 3) && oy > 0) return oy;
+  if ((Math.abs(a.y1 - b.y0) < 3 || Math.abs(b.y1 - a.y0) < 3) && ox > 0) return ox;
+  return 0;
+};
+
+/**
+ * No left-over corners or kinks: open-space pieces cut off from the main
+ * living area, and narrow recesses no door uses, are given to the room
+ * beside them that shares their whole side (a toilet grows, a kitchen
+ * widens) so the plan has no unusable space.
+ */
+function absorbDeadSpace(out: LayoutPlan) {
+  for (let pass = 0; pass < 8; pass++) {
+    // Zones that touch along a door's width are one open space.
+    const zs = out.zones;
+    const comp = zs.map((_, i) => i);
+    const find = (i: number): number => (comp[i] === i ? i : (comp[i] = find(comp[i]!)));
+    zs.forEach((a, i) => zs.forEach((b, j) => { if (i < j && touchLen(a, b) >= 900) comp[find(i)] = find(j); }));
+    const area = new Map<number, number>();
+    zs.forEach((z, i) => area.set(find(i), (area.get(find(i)) ?? 0) + (z.x1 - z.x0) * (z.y1 - z.y0)));
+    const main = [...area.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const used = (z: LayoutZone) => out.rooms.some((r) => r.door === z.name && touchLen(r, z) >= 1100 && r.kind !== 'toilet');
+    // A dress too small to use goes to the toilet (or room) it shares a whole side with.
+    const tiny = out.rooms.find((r) => /^dress/i.test(r.name) && Math.min(r.x1 - r.x0, r.y1 - r.y0) < 1300);
+    if (tiny) {
+      const host = out.rooms
+        .filter((r) => r !== tiny && ((Math.abs(r.x0 - tiny.x0) < 3 && Math.abs(r.x1 - tiny.x1) < 3) || (Math.abs(r.y0 - tiny.y0) < 3 && Math.abs(r.y1 - tiny.y1) < 3)) && touchLen(r, tiny) > 0)
+        .sort((a, b) => Number(b.kind === 'toilet') - Number(a.kind === 'toilet'))[0];
+      if (host) {
+        host.x0 = Math.min(host.x0, tiny.x0);
+        host.y0 = Math.min(host.y0, tiny.y0);
+        host.x1 = Math.max(host.x1, tiny.x1);
+        host.y1 = Math.max(host.y1, tiny.y1);
+      }
+      out.rooms = out.rooms.filter((r) => r !== tiny);
+      continue;
+    }
+    const victim = zs.find((z, i) => {
+      const w = Math.min(z.x1 - z.x0, z.y1 - z.y0);
+      if (find(i) !== main) return true; // cut off
+      if (w >= 1900) return false;
+      // A narrow recess: it meets the rest of the open space only along its short side.
+      const open = zs.filter((o) => o !== z).reduce((a, o) => a + touchLen(z, o), 0);
+      return open <= w + 5 && !used(z);
+    });
+    if (!victim) return;
+    // The room sharing a whole side of it takes it over (wet and service rooms first, bedrooms last).
+    const rank = (k: Room['kind']) => (['toilet', 'service', 'other', 'kitchen', 'pooja', 'dining', 'bedroom'] as Room['kind'][]).indexOf(k);
+    const takers = out.rooms
+      .filter((r) => (Math.abs(r.x0 - victim.x0) < 3 && Math.abs(r.x1 - victim.x1) < 3 && touchLen(r, victim) > 0) || (Math.abs(r.y0 - victim.y0) < 3 && Math.abs(r.y1 - victim.y1) < 3 && touchLen(r, victim) > 0))
+      .sort((a, b) => rank(a.kind) - rank(b.kind));
+    const t = takers[0];
+    if (!t) {
+      // Nothing lines up: leave it, but stop trying it.
+      out.zones = zs.filter((z) => z !== victim).concat([{ ...victim, name: victim.name }]);
+      if (pass > 5) return;
+      continue;
+    }
+    t.x0 = Math.min(t.x0, victim.x0);
+    t.y0 = Math.min(t.y0, victim.y0);
+    t.x1 = Math.max(t.x1, victim.x1);
+    t.y1 = Math.max(t.y1, victim.y1);
+    out.zones = zs.filter((z) => z !== victim);
+  }
 }

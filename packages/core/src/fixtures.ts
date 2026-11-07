@@ -80,7 +80,10 @@ function onWall(room: Room, r: Rect, side: PlanSide, id: string, along: number):
  */
 function toiletByWindow(model: BuildingModel, room: Room): FurnitureItem[] | undefined {
   const r = roomClearRect(model, room);
-  for (const side of SIDES) {
+  // With windows on two walls, use the one that leaves the door on a side wall (so the door faces the basin).
+  const door0 = doorSide(model, room);
+  const order = [...SIDES].sort((a, b) => Number(door0 !== undefined && OPP[a] === door0) - Number(door0 !== undefined && OPP[b] === door0) || Number(a === door0) - Number(b === door0));
+  for (const side of order) {
     const win = roomOpeningsOn(model, room, side).find((o) => o.kind === 'window' || o.kind === 'sliding');
     if (!win) continue;
     const p = pointOnWall(getWall(model, win.wallId), win.offset);
@@ -91,7 +94,14 @@ function toiletByWindow(model: BuildingModel, room: Room): FurnitureItem[] | und
     const items: FurnitureItem[] = [wc];
     // Shower on the opposite wall, facing the WC, if the WC's leg room still leaves space for it.
     // A shower area is open floor, so the door may swing over it.
-    if (depth >= 700 + 450 + 900) {
+    const doorAt = doorSide(model, room);
+    if (doorAt === OPP[side]) {
+      // The door is where the shower would go: keep the shower away from the door, beside the WC.
+      const [lo, hi] = horizontal ? [r.x0, r.x1] : [r.y0, r.y1];
+      const far = along - lo > hi - along ? lo : hi;
+      const sh = onWall(room, r, side, 'shower', far);
+      if (!rectsOverlap(itemFootprint(sh), itemFootprint(wc), 5)) items.push(sh);
+    } else if (depth >= 700 + 450 + 900) {
       const sh = onWall(room, r, OPP[side], 'shower', along);
       if (!rectsOverlap(itemFootprint(sh), itemFootprint(wc), 5)) items.push(sh);
     }

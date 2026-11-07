@@ -739,7 +739,12 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
         const width = lr.kind === 'toilet' ? 750 : lr.kind === 'pooja' || lr.kind === 'other' ? 760 : lr.kind === 'service' ? 760 : 900;
         let placed = false;
         // The named target first; failing that any open zone it touches, so no room is left without a way in.
-        const targets = [...rectOf(lr.door), ...args.zones.filter((z) => z.name !== lr.door)];
+        // A pooja opens only off the living area (or else the kitchen), never a passage or a bedroom.
+        const living = /^(living|foyer|dining|hall|entrance)/i;
+        const targets =
+          lr.kind === 'pooja'
+            ? [...rectOf(lr.door), ...args.zones.filter((z) => z.name !== lr.door && living.test(z.name)), ...args.rooms.filter((r) => r.kind === 'kitchen')]
+            : [...rectOf(lr.door), ...args.zones.filter((z) => z.name !== lr.door)];
         for (const t of targets) {
           const sides: { side: PlanSide4; s0: number; s1: number }[] = [];
           const ox = [Math.max(lr.x0, t.x0), Math.min(lr.x1, t.x1)] as const;
@@ -754,7 +759,12 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
           const tc = horizontal ? (t.x0 + t.x1) / 2 : (t.y0 + t.y1) / 2;
           const nearStart = Math.abs(sd.s0 - tc) <= Math.abs(sd.s1 - tc);
           const margin = 60 + 115 / 2 + width / 2;
-          const along = nearStart ? sd.s0 + margin : sd.s1 - margin;
+          let along = nearStart ? sd.s0 + margin : sd.s1 - margin;
+          if (lr.kind === 'toilet') {
+            // A toilet is entered at the middle of its wall, facing the wash basin, clear of the WC and shower at the ends.
+            const mid = horizontal ? (lr.x0 + lr.x1) / 2 : (lr.y0 + lr.y1) / 2;
+            along = Math.min(sd.s1 - margin, Math.max(sd.s0 + margin, mid));
+          }
           const origin = horizontal ? lr.x0 : lr.y0;
           const o: Opening = { id: ctx.newId('door'), label: `${lr.name} door`, wallId: blockWallId(room.id, sd.side), kind: 'door', offset: Math.round(along - origin), width, height: 2100, swingSide: 'left', hinge: nearStart ? 'start' : 'end' };
           model.openings.push(o);
@@ -968,6 +978,11 @@ export function applyOperation(input: BuildingModel, operation: Operation): OpRe
       const [cw, ch] = turns % 2 ? [was.y1 - was.y0, was.x1 - was.x0] : [was.x1 - was.x0, was.y1 - was.y0];
       setBlockClearSize(model, room, Math.round(cw), Math.round(ch));
       rehomeDoors(model, room, ctx);
+      // A turned toilet or kitchen is fitted out again to suit its new window and door.
+      if (room.kind === 'toilet' || room.kind === 'kitchen') {
+        model.furniture = model.furniture.filter((f) => !(f.roomId === room.id && getCatalogueItem(f.catalogueId)?.category === 'sanitary'));
+        fitOutRoom(model, room);
+      }
       for (const f of model.furniture) if (f.roomId === room.id) ctx.touch(f.id);
       for (const c of coresOf(model)) if (c.roomId === room.id) ctx.touch(c.id);
       ctx.touch(room.id);

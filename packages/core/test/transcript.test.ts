@@ -18,8 +18,8 @@ describe('transcript requests', () => {
     const after = roomClearRect(m, room(m, 'Toilet 1'));
     expect(Math.round(after.x1 - after.x0)).toBe(Math.round(before.y1 - before.y0));
     const items = m.furniture.filter((f) => f.roomId === t1.id).map(itemFootprint);
-    expect(items.length).toBe(2);
-    expect(rectsOverlap(items[0]!, items[1]!, 5)).toBe(false);
+    expect(items.length).toBeGreaterThanOrEqual(2);
+    for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) expect(rectsOverlap(items[i]!, items[j]!, 5)).toBe(false);
     expect(errors(m)).toEqual([]);
   });
 
