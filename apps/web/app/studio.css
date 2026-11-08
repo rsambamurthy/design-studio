@@ -51,7 +51,7 @@
 }
 .plan-toolbar button { min-width: 34px; height: 32px; padding: 0 8px; font-size: 14px; line-height: 1; }
 .plan-toolbar-sep { width: 1px; background: var(--color-border); margin: 2px 2px; }
-.plan-svg { display: block; width: 100%; height: min(520px, 62dvh); min-height: 300px; touch-action: none; cursor: grab; user-select: none; }
+.plan-svg { display: block; width: 100%; height: max(420px, calc(100dvh - 330px)); min-height: 300px; touch-action: none; cursor: grab; user-select: none; }
 .plan-svg:active { cursor: grabbing; }
 
 .plan-svg .room { fill: #fff; }
@@ -486,3 +486,25 @@ button.tab { background: none; border: none; cursor: pointer; font-family: inher
 .plan-svg .wall-grab.wall-v, .plan-svg .wall-grab.wall-v .hit { cursor: col-resize; }
 .plan-svg .wall-grab .hit { fill: transparent; pointer-events: all; }
 .plan-svg .wall-grab:hover .block-wall, .plan-svg .wall-grab:hover line:not(.hit) { fill: var(--theme-accent, #2d2a7a); stroke: var(--theme-accent, #2d2a7a); }
+
+/* Screen layout: hide the side panel or focus on the plan. */
+.studio-title { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.studio-title h1 { font-size: 20px; line-height: 30px; }
+.studio-title .sa-subtitle { margin: 0; font-size: 13px; }
+.studio-title.gone { display: none; }
+.workspace.wide { grid-template-columns: 1fr; }
+.workspace.focus { margin-top: 0; }
+.workspace.focus .plan-svg { height: max(420px, calc(100dvh - 190px)); }
+.agents-bar[hidden] { display: none; }
+.workspace.wide:not(.focus) .plan-svg { height: max(420px, calc(100dvh - 300px)); }
+.side-card { position: relative; }
+.side-card[hidden] { display: none; }
+.panel-hide { position: absolute; top: 10px; right: 10px; background: none; border: 1px solid var(--color-border); border-radius: 6px; font: inherit; font-size: 11.5px; font-weight: 600; color: var(--color-muted); padding: 3px 8px; cursor: pointer; }
+.panel-hide:hover { color: var(--theme-accent); border-color: var(--theme-accent); }
+.view-btns { display: flex; gap: 6px; }
+.view-btns .btn-sm.on { background: var(--theme-accent-light); color: var(--theme-accent); border-color: var(--theme-accent); }
+/* One tidy row each for the agents and the room blocks; they scroll sideways on a narrow screen. */
+.agents-bar, .palette { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.agents-bar > *, .palette > * { flex: none; }
+@media (max-width: 900px) { .view-btns { display: none; } }
+.side-card .side-tabs { padding-right: 66px; }

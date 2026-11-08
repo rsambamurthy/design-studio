@@ -101,7 +101,47 @@ function examplesFor(m: BuildingModel): string[] {
 
 export default function Studio({ email, initial }: { email: string; initial: DesignDetail }) {
   const [design, setDesign] = useState<DesignDetail>(initial);
-  const [tab, setTab] = useState<Tab>('assistant');
+  const [tab, setTabOnly] = useState<Tab>('assistant');
+  // The side panel (assistant, brief, cost...) can be hidden so the plan gets the whole width;
+  // focus hides the menu and the panel together. Both are remembered on this device.
+  const [panel, setPanelState] = useState(true);
+  const [focus, setFocusState] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem('ds.panel') === 'hidden') setPanelState(false);
+    } catch {
+      /* no stored choice */
+    }
+  }, []);
+  const setPanel = (v: boolean) => {
+    setPanelState(v);
+    if (v) setFocusState(false);
+    try {
+      localStorage.setItem('ds.panel', v ? 'shown' : 'hidden');
+    } catch {
+      /* not remembered */
+    }
+  };
+  const setFocus = (v: boolean) => setFocusState(v);
+  // Opening a tab always brings the panel back.
+  const setTab = (t: Tab) => {
+    setTabOnly(t);
+    setPanelState(true);
+    setFocusState(false);
+  };
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'Escape') setFocusState(false);
+      else if (e.key === '[') setPanelState((v) => !v);
+      else if (e.key === 'f' || e.key === 'F') setFocusState((v) => !v);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  const panelShown = panel && !focus;
   const [log, setLog] = useState<ChatEntry[]>([
     { role: 'ai', text: `Rev ${revisionLetter(initial.currentRev)} loaded. Describe a change in your own words; every change is saved and can be undone.` },
   ]);
@@ -522,20 +562,25 @@ export default function Studio({ email, initial }: { email: string; initial: Des
   const lineCount = input.split('\n').filter((l) => l.trim()).length;
 
   return (
-    <AppShell email={email} chip={design.name} active={navActive} designId={design.id} onNav={onNav}>
+    <AppShell email={email} chip={design.name} active={navActive} designId={design.id} onNav={onNav} focus={focus}>
+      <div className={`studio-title ${focus ? 'gone' : ''}`}>
       <h1>{design.name}</h1>
       <p className="sa-subtitle">
         {model.levelName} · Rev {revisionLetter(viewing?.number ?? design.currentRev)}
         {current?.label && !viewing ? ` (${current.label})` : ''} · {overall} · north is {model.northAngle === 0 ? 'up' : `${model.northAngle}° from up`}
       </p>
+      </div>
       {notice && (
         <p className="form-error" role="alert">
           {notice} <button className="linkish" onClick={() => setNotice('')}>dismiss</button>
         </p>
       )}
 
-      <div className="workspace">
-        <section className="card side-card" aria-label="Assistant, versions and sharing">
+      <div className={`workspace ${panelShown ? '' : 'wide'} ${focus ? 'focus' : ''}`}>
+        <section className="card side-card" aria-label="Assistant, versions and sharing" hidden={!panelShown}>
+          <button type="button" className="panel-hide" onClick={() => setPanel(false)} title="Hide this panel so the plan uses the full width (shortcut: [ )" aria-label="Hide the side panel">
+            « Hide
+          </button>
           <div className="tabs side-tabs" role="tablist">
             {(['assistant', 'brief', 'cost', 'site', 'versions', 'share'] as Tab[]).map((t) => (
               <button
@@ -712,7 +757,7 @@ export default function Studio({ email, initial }: { email: string; initial: Des
         </section>
 
         <section className="card plan-card" aria-label="Plan">
-          <div className="agents-bar" role="toolbar" aria-label="Agents">
+          <div className="agents-bar" role="toolbar" aria-label="Agents" hidden={focus}>
             <span className="agents-title">✦ Agents</span>
             {agents.map((a) => (
               <button key={a.key} type="button" className={`agent-chip ${a.why ? 'off' : ''}`} aria-disabled={!!a.why} title={a.why || undefined} onClick={() => (a.why ? setAgentWhy(`${a.label}: ${a.why}`) : (setAgentWhy(''), a.go()))}>
@@ -726,6 +771,16 @@ export default function Studio({ email, initial }: { email: string; initial: Des
             </p>
           )}
           <div className="canvas-head">
+            <div className="view-btns" role="group" aria-label="Layout of the screen">
+              {!panelShown && !focus && (
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setPanel(true)} title="Show the assistant, brief and cost panel (shortcut: [ )">
+                  » Show panel
+                </button>
+              )}
+              <button type="button" className={`btn-secondary btn-sm ${focus ? 'on' : ''}`} onClick={() => setFocus(!focus)} aria-pressed={focus} title={focus ? 'Back to the normal view (Esc)' : 'Hide the menu and panel and show only the plan (shortcut: F)'}>
+                {focus ? '✕ Exit focus' : '⤢ Focus on plan'}
+              </button>
+            </div>
             <div className="tabs">
               <button type="button" className={`tab ${planMode === 'plan' ? 'on' : ''}`} onClick={() => setPlanMode('plan')}>Plan</button>
               <button type="button" className={`tab ${planMode === 'site' ? 'on' : ''}`} onClick={() => setPlanMode('site')}>Site</button>
